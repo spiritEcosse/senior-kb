@@ -4,23 +4,24 @@
 
 **Краткий ответ:**
 GIL запрещает другим потокам исполнять байткод, пока текущий работает.
-После истечения интервала (по умолчанию 5 мс, sys.getswitchinterval()) проверяется флаг «хочу GIL» — если есть желающий поток, текущий отдаёт блокировку и засыпает.
+После истечения интервала (по умолчанию 5 мс, `sys.getswitchinterval()`) проверяется флаг «хочу GIL» — если есть желающий поток, текущий отдаёт блокировку и засыпает.
+
 !!! warning
     «Тик» — устаревшая терминология Python 2 (sys.getcheckinterval = 100 инструкций). В Python 3.2+ переключение по таймеру.
 
-- threading.Lock — логическая защита кода от race conditions.
+- `threading.Lock` — логическая защита кода от race conditions.
 - GIL защищает внутренности интерпретатора (подсчёт ссылок), но НЕ защищает от логических ошибок в пользовательском коде.
 
 **Подробнее:**
 1. Только один поток выполняет байткод в каждый момент времени.
 2. CPU-bound задачи — потоки не помогают. I/O-bound — помогают (GIL отпускается ядром ОС на время системного вызова I/O).
 3. Обходы GIL:
-- multiprocessing — отдельный интерпретатор на каждый процесс
+- `multiprocessing` — отдельный интерпретатор на каждый процесс
 - C-расширения (NumPy, Pillow) — явно освобождают GIL внутри тяжёлых вычислений
 - free-threaded CPython (Python 3.13+, PEP 703, экспериментально)
-!!! warning
-    asyncio НЕ обходит GIL — он однопоточный и не нуждается в параллельных потоках.
 
+!!! warning
+    `asyncio` НЕ обходит GIL — он однопоточный и не нуждается в параллельных потоках.
 
 🔗 [https://www.youtube.com/watch?v=AWX4JnAnjBE](https://www.youtube.com/watch?v=AWX4JnAnjBE)
 
@@ -30,40 +31,41 @@ GIL запрещает другим потокам исполнять байтк
 
 **Краткий ответ:**
 arena (256 KB) → пул (4 KB) → блок (8–512 B для одного объекта).
+
 !!! warning
     Минимальный блок — 8 байт (кратные 8: 8, 16, 24, ..., 512). Не 16.
 
 Объект удаляется, когда счётчик ссылок = 0.
-sys.getrefcount() возвращает n+1 (сама функция держит ссылку).
+`sys.getrefcount()` возвращает n+1 (сама функция держит ссылку).
 Числа -5..255 и интернированные строки — одиночки (один объект в памяти).
-__del__ вызывается перед удалением; del уменьшает refcount на 1.
+`__del__` вызывается перед удалением; `del` уменьшает refcount на 1.
 Объекты > 512 B → память запрашивается напрямую у ОС.
 
 **Как аллокатор выбирает арену:**
 Новый объект — в самую ЗАПОЛНЕННУЮ арену. Цель: освобождать пустые арены как можно быстрее.
 
 **Сборщик мусора:**
-Помимо reference counting — cyclic GC (модуль gc) для обнаружения циклических ссылок.
+Помимо reference counting — cyclic GC (модуль `gc`) для обнаружения циклических ссылок.
 
 ---
 
 ### Генераторы, итераторы, итерируемые объекты
 
-- Итерируемый объект — реализует __iter__ (list, dict, str, set, range...)
-- Итератор — реализует __next__; при исчерпании бросает StopIteration
-- Генератор — функция с yield; автоматически является итератором; ленивые вычисления
+- Итерируемый объект — реализует `__iter__` (list, dict, str, set, range...)
+- Итератор — реализует `__next__`; при исчерпании бросает `StopIteration`
+- Генератор — функция с `yield`; автоматически является итератором; ленивые вычисления
 
 **List comprehension vs Generator expression:**
-- [x**2 for x in nums] — весь список сразу в памяти
-- (x**2 for x in nums) — по одному элементу; для больших/бесконечных последовательностей
+- `[x**2 for x in nums]` — весь список сразу в памяти
+- `(x**2 for x in nums)` — по одному элементу; для больших/бесконечных последовательностей
 
 ---
 
 ### Корутины и asyncio
 
 **Краткий ответ:**
-Корутина — функция, выполнение которой можно приостановить (await) и возобновить.
-asyncio = кооперативная многозадачность: задачи сами решают, когда отдать управление.
+Корутина — функция, выполнение которой можно приостановить (`await`) и возобновить.
+`asyncio` = кооперативная многозадачность: задачи сами решают, когда отдать управление.
 
 **async vs thread vs process:**
 - Корутины: самые лёгкие, один поток, нет переключения контекста ОС
@@ -71,42 +73,45 @@ asyncio = кооперативная многозадачность: задач�
 - Процессы: отдельный интерпретатор, нет GIL; хорошо для CPU-bound
 
 **Почему в asyncio меньше нужны Lock/Mutex:**
-Один поток. Гонок данных нет, пока нет await между обращениями к shared state.
+Один поток. Гонок данных нет, пока нет `await` между обращениями к shared state.
 
 ---
 
 ### Декораторы
 
-Декоратор — callable, принимает функцию, возвращает другую. Синтаксический сахар для func = decorator(func).
+Декоратор — callable, принимает функцию, возвращает другую. Синтаксический сахар для `func = decorator(func)`.
 
-@functools.wraps(func) — сохраняет __name__, __doc__ и др.
-@staticmethod — без self, нет доступа к экземпляру или классу
-@classmethod — первый аргумент cls (класс); альтернативные конструкторы
-@property — превращает метод в управляемый атрибут (геттер/сеттер без явного вызова)
+- `@functools.wraps(func)` — сохраняет `__name__`, `__doc__` и др.
+- `@staticmethod` — без `self`, нет доступа к экземпляру или классу
+- `@classmethod` — первый аргумент `cls` (класс); альтернативные конструкторы
+- `@property` — превращает метод в управляемый атрибут (геттер/сеттер без явного вызова)
 
 **Декоратор с параметрами (3 уровня вложенности):**
 
+```python
 def repeat(n):
-def decorator(func):
-def wrapper(*args, **kwargs):
-for _ in range(n):
-func(*args, **kwargs)
-return wrapper
-return decorator
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            for _ in range(n):
+                func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 @repeat(3)
 def greet(name):
-print(f"Hello, {name}!")
+    print(f"Hello, {name}!")
+```
 
 ---
 
 ### Контекстные менеджеры
 
-Реализовать __enter__ и __exit__.
-- __enter__: вызывается при входе в with; возвращает управляемый объект
-- __exit__(exc_type, exc_value, traceback): вызывается при выходе; True — подавить исключение
+Реализовать `__enter__` и `__exit__`.
 
-Альтернатива: @contextlib.contextmanager с yield.
+- `__enter__`: вызывается при входе в `with`; возвращает управляемый объект
+- `__exit__(exc_type, exc_value, traceback)`: вызывается при выходе; `True` — подавить исключение
+
+Альтернатива: `@contextlib.contextmanager` с `yield`.
 
 ---
 
@@ -118,93 +123,114 @@ Python 3.6+: компактная раскладка — индексы отде
 Расширяется при 2/3 заполненности.
 
 Оптимизация сравнения при коллизии:
-if id(key) == id(entity): return True
-if hash(key) != hash(entity): return False
-return key == entity
+
+```python
+if id(key) == id(entity): return True    # один и тот же объект
+if hash(key) != hash(entity): return False  # разные хеши
+return key == entity                     # полное сравнение
+```
 
 **set:** неупорядоченный, неиндексируемый. Только hashable-элементы.
 
 **is vs ==:**
-- is — одна ли ячейка памяти (id())
-- == — равенство значений (__eq__)
+- `is` — одна ли ячейка памяти (`id()`)
+- `==` — равенство значений (`__eq__`)
 
 **copy vs deepcopy:**
-- copy.copy() — поверхностное: вложенные объекты — те же ссылки
-- copy.deepcopy() — рекурсивно копирует все вложенные объекты
+- `copy.copy()` — поверхностное: вложенные объекты — те же ссылки
+- `copy.deepcopy()` — рекурсивно копирует все вложенные объекты
 
 ---
 
 ### __slots__
 
-Заменяет __dict__ экземпляра на фиксированный набор слотов → меньше памяти, быстрее доступ к атрибутам.
+Заменяет `__dict__` экземпляра на фиксированный набор слотов → меньше памяти, быстрее доступ к атрибутам.
 Минус: нет динамических атрибутов, сложнее множественное наследование.
 
+```python
 class Point:
-__slots__ = ('x', 'y')
-def __init__(self, x, y):
-self.x, self.y = x, y
+    __slots__ = ('x', 'y')
+
+    def __init__(self, x, y):
+        self.x, self.y = x, y
+```
 
 ---
 
 ### Дескрипторы
 
-Объекты, реализующие __get__, __set__, __delete__ — управляют доступом к атрибутам класса.
-На них основаны @property, @classmethod, @staticmethod, поля ORM.
+Объекты, реализующие `__get__`, `__set__`, `__delete__` — управляют доступом к атрибутам класса.
+На них основаны `@property`, `@classmethod`, `@staticmethod`, поля ORM.
 
+```python
 class Validator:
-def __set_name__(self, owner, name):
-self.name = name
-def __get__(self, obj, objtype=None):
-return obj.__dict__.get(self.name)
-def __set__(self, obj, value):
-if not isinstance(value, int):
-raise TypeError(f"{self.name} must be int")
-obj.__dict__[self.name] = value
+    def __set_name__(self, owner, name):
+        self.name = name
+
+    def __get__(self, obj, objtype=None):
+        return obj.__dict__.get(self.name)
+
+    def __set__(self, obj, value):
+        if not isinstance(value, int):
+            raise TypeError(f"{self.name} must be int")
+        obj.__dict__[self.name] = value
 
 class MyModel:
-age = Validator()
+    age = Validator()
+```
 
 ---
 
 ### ABC (Abstract Base Classes)
 
+```python
 from abc import ABC, abstractmethod
 
 class Shape(ABC):
-@abstractmethod
-def area(self) -> float: ...
+    @abstractmethod
+    def area(self) -> float: ...
+```
 
-Попытка создать экземпляр с нереализованным абстрактным методом → TypeError.
-Protocol (typing) — структурная типизация (duck typing + type checking без наследования).
+Попытка создать экземпляр с нереализованным абстрактным методом → `TypeError`.
+`Protocol` (typing) — структурная типизация (duck typing + type checking без наследования).
 
 ---
 
 ### Аннотации типов (typing)
 
-int, str, list[int], dict[str, Any], Optional[str] = str | None
-TypeVar, Generic[T] — обобщённые типы
+```python
+int, str, list[int], dict[str, Any]
+Optional[str]  # = str | None
+TypeVar, Generic[T]  # обобщённые типы
 Callable[[int, str], bool]
-Protocol — определяет структурный интерфейс
-Проверка: mypy, pyright
+Protocol  # структурный интерфейс (duck typing + static check)
+```
+
+Проверка: `mypy`, `pyright`
 
 ---
 
 ### functools
 
-@lru_cache(maxsize=128) — мемоизация с LRU-вытеснением; только для чистых функций
-@cache — неограниченный кэш (Python 3.9+)
-partial(func, *args) — зафиксировать часть аргументов, вернуть новый callable
-reduce(func, iterable) — левая свёртка
+```python
+@lru_cache(maxsize=128)  # мемоизация с LRU-вытеснением; только для чистых функций
+@cache                   # неограниченный кэш (Python 3.9+)
+
+partial(func, *args)     # зафиксировать часть аргументов, вернуть новый callable
+reduce(func, iterable)   # левая свёртка
+```
 
 ---
 
 ### collections
 
-defaultdict(list) — dict с фабрикой по умолчанию; нет KeyError
-Counter(iterable) — подсчёт элементов; поддерживает арифметику
-deque(maxlen=N) — O(1) append/pop с обоих концов; лучше list для очередей
-OrderedDict — сохраняет порядок вставки + move_to_end
-namedtuple — лёгкий иммутабельный record с именованными полями
+```python
+defaultdict(list)    # dict с фабрикой по умолчанию; нет KeyError
+Counter(iterable)    # подсчёт элементов; поддерживает арифметику
+deque(maxlen=N)      # O(1) append/pop с обоих концов; лучше list для очередей
+OrderedDict          # сохраняет порядок вставки + move_to_end
+namedtuple           # лёгкий иммутабельный record с именованными полями
+```
 
 ---
 
@@ -221,9 +247,6 @@ namedtuple — лёгкий иммутабельный record с именова�
 **Краткий ответ:**
 `type` — метакласс для создания классов. Все классы в Python — объекты, созданные через `type`.
 `type(name, bases, attrs)` — создаёт новый класс динамически.
-
-**Метаклассы:**
-Метакласс контролирует создание классов. Определяет `__new__(cls, name, bases, attrs)`.
 
 ```python
 class MyMeta(type):
