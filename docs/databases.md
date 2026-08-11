@@ -31,13 +31,72 @@ ROLLBACK — отмена всех изменений с начала транз
 
 ### N+1 проблема в ORM
 
+```python
 books = Book.objects.all()           # 1 запрос
 for book in books:
-print(book.author.name)          # N запросов (по одному на книгу)
+    print(book.author.name)          # N запросов (по одному на книгу)
+```
 
 Решение в Django:
-- select_related — SQL JOIN для FK и OneToOne (один запрос)
-- prefetch_related — отдельный запрос + Python-объединение для M2M и обратных FK
+- `select_related` — SQL JOIN для FK и OneToOne (один запрос)
+- `prefetch_related` — отдельный запрос + Python-объединение для M2M и обратных FK
+
+```python
+# Правильно:
+books = Book.objects.select_related('author').all()
+```
+
+### annotate vs aggregate
+
+```python
+# aggregate — одно значение на весь queryset
+Order.objects.aggregate(total=Sum('amount'))
+# → {'total': 9500}
+
+# annotate — значение на каждую строку
+Order.objects.values('user_id').annotate(total=Sum('amount'))
+# → [{'user_id': 1, 'total': 500}, {'user_id': 2, 'total': 300}, ...]
+```
+
+### SQL Window Functions
+
+```sql
+-- RANK() — ранг с пропусками при совпадении
+SELECT name, salary,
+       RANK() OVER (PARTITION BY dept ORDER BY salary DESC) as rank
+FROM employees;
+
+-- Running SUM — нарастающий итог
+SELECT date, amount,
+       SUM(amount) OVER (ORDER BY date) as running_total
+FROM orders;
+```
+
+### Индексы PostgreSQL: составной и частичный
+
+```sql
+-- Составной: порядок столбцов важен для prefix-запросов
+CREATE INDEX idx_user_created ON orders(user_id, created_at);
+-- ✓ WHERE user_id = 1
+-- ✓ WHERE user_id = 1 AND created_at > '2024-01-01'
+-- ✗ WHERE created_at > '2024-01-01'  (без user_id — не использует индекс)
+
+-- Частичный: индексирует только подмножество строк
+CREATE INDEX idx_pending_orders ON orders(created_at)
+WHERE status = 'pending';
+-- Меньше размер, быстрее update, полезен при высокой избирательности
+```
+
+### EXPLAIN ANALYZE
+
+```sql
+EXPLAIN ANALYZE SELECT * FROM orders WHERE user_id = 42;
+```
+
+Искать:
+- `Seq Scan` на большой таблице → нет индекса
+- Завышенные `rows` в оценке → устаревшая статистика → запустить `ANALYZE`
+- `Nested Loop` с большим числом итераций → возможно нужен другой тип JOIN
 
 ### CAP-теорема
 
@@ -51,8 +110,8 @@ CP: HBase, Zookeeper. AP: Cassandra, CouchDB.
 
 ### UNION vs UNION ALL
 
-UNION — удаляет дубликаты (дороже: нужна сортировка/хеширование).
-UNION ALL — быстрее; дубликаты остаются.
+`UNION` — удаляет дубликаты (дороже: нужна сортировка/хеширование).
+`UNION ALL` — быстрее; дубликаты остаются.
 
 ### Масштабирование реляционной БД
 
@@ -61,11 +120,6 @@ UNION ALL — быстрее; дубликаты остаются.
 - Connection pooling: PgBouncer
 - Кэширование: Redis (cache-aside)
 - Денормализация для read-heavy нагрузок
-- Оптимизация запросов: индексы, EXPLAIN ANALYZE, covering indexes, избегать SELECT *
-
-### Профилирование запросов
-
-EXPLAIN ANALYZE в PostgreSQL — план выполнения, реальное время, реальное количество строк.
-Искать: Seq Scan на больших таблицах (нет индекса), завышенные оценки строк (устаревшая статистика → ANALYZE).
+- Оптимизация запросов: индексы, `EXPLAIN ANALYZE`, covering indexes, избегать `SELECT *`
 
 ---
