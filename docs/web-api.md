@@ -18,7 +18,7 @@ Stateful: сервер хранит сессию; труднее масштаб�
 
 ### JWT (JSON Web Token)
 
-Структура: header.payload.signature (base64url).
+Структура: `header.payload.signature` (base64url).
 Header — алгоритм (HS256/RS256). Payload — claims (sub, exp, iat). Signature — HMAC или RSA.
 Stateless: серверу нужен только секрет/публичный ключ для проверки.
 Риск: токен нельзя отозвать до истечения срока без blocklist.
@@ -38,16 +38,45 @@ OpenID Connect добавляет слой идентификации повер
 ### CSRF в Django
 
 1. Генерирует токен для сессии
-2. Токен в форме (скрытое поле) + cookie csrftoken
-3. При отправке: сравнение cookie и X-CSRFToken
+2. Токен в форме (скрытое поле) + cookie `csrftoken`
+3. При отправке: сравнение cookie и `X-CSRFToken`
 4. Несовпадение → 403
 
 🔗 [https://telegra.ph/Django-CSRF-Rukovodstvo-08-04](https://telegra.ph/Django-CSRF-Rukovodstvo-08-04)
 
 ### WSGI vs ASGI
 
-WSGI: синхронный; callable(environ, start_response). Серверы: Gunicorn, uWSGI.
+WSGI: синхронный; `callable(environ, start_response)`. Серверы: Gunicorn, uWSGI.
 ASGI: асинхронный; поддерживает WebSocket, long-polling. Серверы: Uvicorn, Daphne.
+
+### Безопасность API: IDOR
+
+```python
+# Уязвимо: пользователь может передать чужой order_id
+@api_view(['GET'])
+def get_order(request, order_id):
+    order = Order.objects.get(pk=order_id)  # IDOR!
+    return Response(OrderSerializer(order).data)
+
+# Правильно: фильтровать по текущему пользователю
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_order(request, order_id):
+    order = get_object_or_404(Order, pk=order_id, user=request.user)
+    return Response(OrderSerializer(order).data)
+```
+
+### .exists() vs bool(queryset)
+
+```python
+# Медленно: загружает все объекты в память
+if Order.objects.filter(user=user):
+    ...
+
+# Быстро: SELECT 1 LIMIT 1
+if Order.objects.filter(user=user).exists():
+    ...
+```
 
 ### DNS + полный цикл HTTP-запроса
 
