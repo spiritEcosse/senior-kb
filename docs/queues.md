@@ -73,4 +73,55 @@ def process_payment(self, payment_id: int):
 RabbitMQ: message broker; push model; messages deleted after consumption; great for task queues and routing.
 Kafka: distributed log; pull model; messages retained for a configurable period; great for event streaming, audit logs, high-throughput pipelines; consumers track their own offset.
 
+**What "high-throughput pipeline" means in practice:**
+
+A pipeline is a chain of processing steps where data flows from producers through Kafka topics to one or more consumers that transform, aggregate, or store it. Each consumer reads independently at its own pace.
+
+```
+# Event streaming — one topic, multiple independent consumers
+User action (click, purchase)
+  → Kafka topic: user-events
+      → Consumer 1: update real-time analytics dashboard
+      → Consumer 2: trigger recommendation engine
+      → Consumer 3: write to data warehouse (Redshift, BigQuery)
+
+# ETL / data lake ingestion
+PostgreSQL row changes (Debezium CDC)
+  → Kafka topic: db-changes
+      → Flink/Spark Streaming
+          → S3 / Parquet (data lake)
+# No bulk exports needed — every DB write streams automatically
+
+# Log aggregation
+100 app servers
+  → Kafka topic: app-logs    (buffers the firehose)
+      → Logstash / Flink
+          → Elasticsearch
+# If ES goes down: logs accumulate in Kafka, replay when it recovers
+
+# Fraud detection — sliding window over a stream
+Payment events
+  → Kafka
+      → Flink (rule: >3 transactions in 60s from same card)
+          → alert topic
+              → fraud service
+
+# Microservice event bus
+Order Service publishes: OrderCreated
+  → Kafka
+      → Inventory Service:    reserve stock
+      → Notification Service: send confirmation email
+      → Analytics Service:    update dashboard
+```
+
+**Why Kafka fits these and RabbitMQ doesn't scale as well:**
+
+| | RabbitMQ | Kafka |
+|---|---|---|
+| Message retention | Deleted after consumption | Days/weeks — full replay possible |
+| Multiple consumers | Competing (one gets the message) | Independent — each reads at own offset |
+| Throughput | ~50k msg/sec | Millions msg/sec (sequential disk writes) |
+| Backpressure | Slow consumer blocks the queue | Slow consumer just falls behind on offset |
+| Use case | Task queues, RPC, routing | Event streaming, audit log, data pipelines |
+
 ---
