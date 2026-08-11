@@ -50,6 +50,7 @@ nav:
     - Python Core: en/python-core.md
     - OOP: en/oop.md
     - Concurrency & Async: en/concurrency.md
+    - Threading vs asyncio vs Multiprocessing: en/threading.md
     - Databases: en/databases.md
     - Web & API: en/web-api.md
     - Caching: en/caching.md
@@ -66,6 +67,7 @@ nav:
     - Python Core: python-core.md
     - ООП: oop.md
     - Параллелизм и async: concurrency.md
+    - Threading vs asyncio vs Multiprocessing: threading.md
     - Базы данных: databases.md
     - Web и API: web-api.md
     - Кэширование: caching.md
