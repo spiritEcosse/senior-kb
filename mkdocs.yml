@@ -58,6 +58,7 @@ nav:
     - Architecture: en/architecture.md
     - Testing: en/testing.md
     - Security: en/security.md
+    - System Programming: en/system.md
     - DevOps: en/devops.md
     - Git: en/git.md
     - Performance: en/performance.md
@@ -73,6 +74,7 @@ nav:
     - Архитектура: architecture.md
     - Тестирование: testing.md
     - Безопасность: security.md
+    - Системное программирование: system.md
     - DevOps: devops.md
     - Git: git.md
     - Производительность: performance.md
