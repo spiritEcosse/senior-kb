@@ -72,19 +72,57 @@ SELECT date, amount,
 FROM orders;
 ```
 
-### Индексы PostgreSQL: составной и частичный
+### Составной и частичный индексы
+
+#### Составной индекс
+
+Поддерживается всеми major БД (PostgreSQL, MySQL/InnoDB, SQLite, Oracle, MSSQL). Правило prefix-запросов работает везде одинаково.
 
 ```sql
--- Составной: порядок столбцов важен для prefix-запросов
 CREATE INDEX idx_user_created ON orders(user_id, created_at);
 -- ✓ WHERE user_id = 1
 -- ✓ WHERE user_id = 1 AND created_at > '2024-01-01'
--- ✗ WHERE created_at > '2024-01-01'  (без user_id — не использует индекс)
+-- ✗ WHERE created_at > '2024-01-01'  (нет prefix — индекс не используется)
+```
 
--- Частичный: индексирует только подмножество строк
+Порядок столбцов критичен: индекс используется только если запрос фильтрует по **префиксу** индексированных столбцов.
+
+#### Частичный индекс
+
+Индексирует только подмножество строк, соответствующих условию `WHERE` — меньше размер, быстрее запись, выше избирательность.
+
+**Поддержка по базам:**
+
+| База данных | Поддержка |
+|---|---|
+| PostgreSQL | ✅ Полная |
+| SQLite | ✅ Полная |
+| MSSQL | ✅ Называется "filtered index" |
+| Oracle | ⚠️ Только через function-based indexes |
+| MySQL / MariaDB | ❌ Не поддерживается |
+
+**PostgreSQL / SQLite / MSSQL:**
+
+```sql
+-- Индексирует только pending-заказы — намного меньше полного индекса по status
 CREATE INDEX idx_pending_orders ON orders(created_at)
 WHERE status = 'pending';
--- Меньше размер, быстрее update, полезен при высокой избирательности
+```
+
+**Обходной путь для MySQL — generated column + обычный индекс:**
+
+```sql
+-- Шаг 1: добавить генерируемый столбец, NULL когда не интересно
+ALTER TABLE orders
+  ADD COLUMN is_pending TINYINT(1) GENERATED ALWAYS AS (
+    IF(status = 'pending', 1, NULL)
+  ) STORED;
+
+-- Шаг 2: проиндексировать только не-NULL значения (NULL никогда не индексируется в MySQL)
+CREATE INDEX idx_pending_orders ON orders(is_pending, created_at);
+
+-- Запрос использует индекс:
+SELECT * FROM orders WHERE is_pending = 1 AND created_at > '2024-01-01';
 ```
 
 ### EXPLAIN ANALYZE
