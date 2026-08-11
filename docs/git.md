@@ -1,6 +1,6 @@
 ## 12. Git
 
-### Основные концепции
+### Core concepts
 
 **Working tree → Index (staging) → Repository:**
 
@@ -8,51 +8,48 @@
 working tree  →  git add  →  index (staging)  →  git commit  →  .git/objects
 ```
 
-```bash
-git status                        # что staged, unstaged, untracked
-git diff                          # неиндексированные изменения
-git diff --staged                 # staged vs последний коммит
-git log --oneline --graph --all   # визуальная история веток
-```
+- `git status` — show what's staged, unstaged, untracked
+- `git diff` — unstaged changes; `git diff --staged` — staged vs last commit
+- `git log --oneline --graph --all` — visual branch history
 
 ---
 
-### Ветки и слияние
+### Branching and merging
 
 ```bash
-git checkout -b feature/my-feature  # создать + переключиться
-git merge feature/my-feature        # слить в текущую ветку (создаёт merge commit)
-git rebase main                     # переиграть коммиты поверх main (линейная история)
-git cherry-pick abc1234             # применить один коммит к текущей ветке
+git checkout -b feature/my-feature   # create + switch
+git merge feature/my-feature         # merge into current branch (creates merge commit)
+git rebase main                      # replay commits on top of main (linear history)
+git cherry-pick abc1234              # apply a single commit to current branch
 ```
 
 **merge vs rebase:**
 
 | | `merge` | `rebase` |
 |---|---|---|
-| История | Сохраняет — merge commit показывает место соединения | Перезаписывает — линейная, чище |
-| Безопасен на общей ветке | ✅ Да | ❌ Нет — перезаписывает общую историю |
-| Использовать когда | `main`, `develop`, общие ветки | Локальные feature-ветки перед PR |
+| History | Preserves — merge commit shows the join | Rewrites — linear, cleaner |
+| Safe on shared branch | ✅ Yes | ❌ No — rewrites shared history |
+| Use when | `main`, `develop`, shared branches | Local feature branches before PR |
 
 !!! warning
-    Никогда не rebase ветку, которую используют другие — это перезаписывает SHA коммитов и вынуждает всех делать reset.
+    Never rebase a branch that others have checked out — it rewrites commit SHAs and forces everyone else to reset.
 
 ---
 
 ### Reset, revert, restore
 
 ```bash
-# git reset — переместить HEAD (и опционально staging/working tree)
-git reset --soft HEAD~1    # отменить последний коммит, оставить изменения staged
-git reset --mixed HEAD~1   # отменить коммит, оставить unstaged (по умолчанию)
-git reset --hard HEAD~1    # отменить коммит, выбросить все изменения ⚠️
+# git reset — move HEAD (and optionally staging/working tree)
+git reset --soft HEAD~1    # undo last commit, keep changes staged
+git reset --mixed HEAD~1   # undo last commit, keep changes unstaged (default)
+git reset --hard HEAD~1    # undo last commit, discard all changes ⚠️
 
-# git revert — создать новый коммит, отменяющий предыдущий (безопасно для shared веток)
+# git revert — create a new commit that undoes a previous one (safe for shared branches)
 git revert abc1234
 
-# git restore — отменить изменения в working tree (коммиты не трогает)
-git restore file.py           # отменить несохранённые изменения в файле
-git restore --staged file.py  # убрать файл из staging
+# git restore — discard working tree changes (does not touch commits)
+git restore file.py        # discard unstaged changes in file.py
+git restore --staged file.py  # unstage a file
 ```
 
 ---
@@ -60,28 +57,28 @@ git restore --staged file.py  # убрать файл из staging
 ### Stash
 
 ```bash
-git stash                       # сохранить изменения, вернуть HEAD
-git stash push -m "wip: login"  # с описанием
-git stash list                  # список stash-ей
-git stash pop                   # применить последний + удалить
-git stash apply stash@{2}       # применить конкретный без удаления
-git stash drop stash@{0}        # удалить stash
+git stash                      # save dirty working tree, revert to HEAD
+git stash push -m "wip: login" # with a description
+git stash list                 # show all stashes
+git stash pop                  # apply latest stash + delete it
+git stash apply stash@{2}      # apply specific stash without deleting
+git stash drop stash@{0}       # delete a stash
 ```
 
 ---
 
-### Полезные команды инспекции
+### Useful inspection commands
 
 ```bash
-git blame file.py              # кто изменил каждую строку и когда
-git bisect start               # бинарный поиск коммита с багом
-git bisect bad                 # текущий коммит плохой
-git bisect good v1.0           # v1.0 был хорошим
-# git bisect автоматически чекаутит середину — проверь, затем:
+git blame file.py              # who changed each line and when
+git bisect start               # binary search for the commit that introduced a bug
+git bisect bad                 # current commit is bad
+git bisect good v1.0           # v1.0 was good
+# git bisect automatically checks out the midpoint — test, then:
 git bisect good / git bisect bad
 
-git reflog                     # история перемещений HEAD — восстановить потерянные коммиты
-git shortlog -sn               # количество коммитов по авторам
+git reflog                     # history of where HEAD has been — recover lost commits
+git shortlog -sn               # commit count per author
 ```
 
 ---
@@ -89,49 +86,49 @@ git shortlog -sn               # количество коммитов по ав
 ### git flow
 
 ```
-main        — всегда production-ready
-develop     — интеграционная ветка
-feature/*   — от develop, сливается обратно в develop
-release/*   — от develop, сливается в main + develop
-hotfix/*    — от main, сливается в main + develop
+main        — always production-ready
+develop     — integration branch
+feature/*   — branched from develop, merged back to develop
+release/*   — branched from develop, merged to main + develop
+hotfix/*    — branched from main, merged to main + develop
 ```
 
-Более простая альтернатива: **GitHub Flow** — ветка от `main`, PR, merge в `main`, деплой.
+Simpler alternative: **GitHub Flow** — branch from `main`, PR, merge to `main`, deploy.
 
 ---
 
-### Исправление ошибок
+### Fixing mistakes
 
 ```bash
-# Изменить последний коммит (сообщение или добавить файл)
+# Amend the last commit message or add forgotten files
 git add forgotten.py
 git commit --amend --no-edit
 
-# Безопасно отменить уже запушенный коммит
+# Undo a pushed commit safely
 git revert HEAD
 git push
 
-# Squash последних 3 коммитов в один (интерактивный rebase)
+# Squash last 3 commits into one (interactive rebase)
 git rebase -i HEAD~3
-# В редакторе: первый оставить 'pick', остальные изменить на 'squash'
+# In editor: keep first as 'pick', change others to 'squash'
 
-# Найти удалённый файл
+# Find a deleted file
 git log --all --full-history -- path/to/file.py
 git checkout <sha>^ -- path/to/file.py
 ```
 
 ---
 
-### .gitignore паттерны
+### .gitignore patterns
 
 ```gitignore
-*.pyc           # все .pyc файлы
-__pycache__/    # директории __pycache__
-.env            # файл с секретами
-dist/           # результат сборки
-!dist/.gitkeep  # кроме этого файла
+*.pyc           # all .pyc files
+__pycache__/    # directories named __pycache__
+.env            # secrets file
+dist/           # build output
+!dist/.gitkeep  # except this one file
 ```
 
-`git rm --cached file` — перестать отслеживать уже закоммиченный файл без удаления локально.
+`git rm --cached file` — stop tracking a file already committed without deleting it locally.
 
 ---

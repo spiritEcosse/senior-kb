@@ -1,65 +1,51 @@
-## 2. ООП
+## 2. OOP
 
-### Множественное наследование и MRO
+### Multiple Inheritance and MRO
 
-Конфликты имён — MRO: сверху вниз, слева направо. Алгоритм: C3 Linearization.
-`MyClass.mro()` или `MyClass.__mro__` — посмотреть порядок.
-`super()` следует MRO; всегда использовать вместо явного имени родителя.
+Name conflicts — MRO: top-down, left-to-right. Algorithm: C3 Linearisation.
+`MyClass.mro()` or `MyClass.__mro__` — inspect the order.
+`super()` follows MRO; always use it instead of the parent's name directly.
 
 ---
 
 ### SOLID
 
-S — Единственная обязанность: один класс = одна причина для изменения
-O — Открытость/закрытость: расширяй через наследование/композицию, не модифицируй
-L — Подстановка Лисков: подкласс полностью взаимозаменяем с родителем
-I — Разделение интерфейсов: много узких интерфейсов > один широкий
-D — Инверсия зависимостей: оба уровня зависят от абстракций
+S — Single Responsibility: one class = one reason to change
+O — Open/Closed: extend via inheritance/composition, don't modify
+L — Liskov Substitution: a subclass is fully interchangeable with its parent
+I — Interface Segregation: many narrow interfaces > one broad one
+D — Dependency Inversion: both levels depend on abstractions
 
 ---
 
-### Шаблоны проектирования
+### Design Patterns
 
-**Порождающие:**
-- Singleton: один экземпляр. В Python: объект на уровне модуля, или `__new__`, или метакласс.
-- Factory Method: делегировать создание объекта подклассам.
-- Abstract Factory: создание семейств связанных объектов.
+**Creational:**
+- Singleton: one instance. In Python: module-level object, or `__new__`, or metaclass.
+- Factory Method: delegate object creation to subclasses.
+- Abstract Factory: create families of related objects.
 
-**Структурные:**
-- Decorator: добавить поведение оборачиванием (Python `@` синтаксис).
-- Proxy: контролировать доступ к объекту (кэш, логирование, авторизация).
-- Adapter: привести один интерфейс к другому.
+**Structural:**
+- Decorator: add behaviour by wrapping (Python `@` syntax).
+- Proxy: control access to an object (cache, logging, authorisation).
+- Adapter: adapt one interface to another.
 
-**Поведенческие:**
-- Observer: издатель уведомляет подписчиков об изменении (Django signals).
-- Strategy: подставить другой алгоритм во время выполнения.
-- Command: инкапсулировать запрос как объект (undo/redo).
+**Behavioural:**
+- Observer: publisher notifies subscribers on change (Django signals).
+- Strategy: swap in a different algorithm at runtime.
+- Command: encapsulate a request as an object (undo/redo).
 
 ---
 
 ### Dataclasses
 
-Автогенерирует `__init__`, `__repr__`, `__eq__` из аннотаций.
+Auto-generates `__init__`, `__repr__`, `__eq__` from annotations.
 
 !!! warning
-    `__hash__` по умолчанию устанавливается в `None` (объект нехешируемый, как любой mutable).
+    `__hash__` is set to `None` by default (object is unhashable, like any mutable).
 
-```python
-from dataclasses import dataclass
-
-@dataclass
-class Point:
-    x: int
-    y: int
-
-p = Point(1, 2)
-print(p)           # Point(x=1, y=2)
-print(p == Point(1, 2))  # True
-```
-
-```python
-@dataclass(frozen=True)   # иммутабельный (hashable), генерирует __hash__
-@dataclass(slots=True)    # экономия памяти (Python 3.10+)
-```
+`__hash__` is only generated when `frozen=True`.
+`@dataclass(frozen=True)` — immutable (hashable).
+`@dataclass(slots=True)` (Python 3.10+) — memory savings.
 
 ---

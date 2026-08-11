@@ -1,23 +1,22 @@
-# Python Senior — База знаний
+# Python Senior — Knowledge Base
 
-Источник: личные заметки + разбор вопросов.
-
-Структура: краткий ответ (для быстрого воспроизведения) → детальное объяснение.
+Source: personal notes + interview question breakdowns.
+Structure: short answer (for quick recall) → detailed explanation.
 
 ---
 
-## Разделы
+## Sections
 
 - [Python Core](python-core.md)
-- [ООП](oop.md)
-- [Параллелизм и асинхронность](concurrency.md)
-- [Базы данных](databases.md)
-- [Web и API](web-api.md)
-- [Кэширование](caching.md)
-- [Очереди и фоновые задачи](queues.md)
-- [Архитектура](architecture.md)
-- [Тестирование](testing.md)
-- [Безопасность](security.md)
+- [OOP](oop.md)
+- [Concurrency and Async](concurrency.md)
+- [Databases](databases.md)
+- [Web and API](web-api.md)
+- [Caching](caching.md)
+- [Message Queues and Background Tasks](queues.md)
+- [Architecture](architecture.md)
+- [Testing and Code Quality](testing.md)
+- [Security](security.md)
 - [DevOps](devops.md)
 - [Git](git.md)
-- [Python vs C++](performance.md)
+- [Python vs C++ Performance](performance.md)

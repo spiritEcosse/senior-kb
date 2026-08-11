@@ -2,90 +2,90 @@
 
 ### GIL (Global Interpreter Lock)
 
-**Краткий ответ:**
-Поток держит GIL и выполняет байт-код. Через интервал (`sys.getswitchinterval()`, по умолчанию 5 мс) интерпретатор проверяет, есть ли другие потоки, ожидающие GIL — если да, текущий поток обязан его отпустить. То есть переключение по таймеру, плюс поток может отпустить GIL раньше сам — например, при блокирующей операции вроде I/O.
+**Short answer:**
+A thread holds the GIL and executes bytecode. After the interval (`sys.getswitchinterval()`, default 5 ms), the interpreter checks whether other threads are waiting for the GIL — if so, the current thread is forced to release it. So switching is timer-based, but a thread can also release the GIL earlier on its own, for example during a blocking I/O operation.
 
 !!! warning
-    «Тик» — устаревшая терминология Python 2 (sys.getcheckinterval = 100 инструкций). В Python 3.2+ переключение по таймеру.
+    "Tick" is outdated Python 2 terminology (`sys.getcheckinterval` = 100 instructions). In Python 3.2+ switching is timer-based.
 
-- `threading.Lock` — логическая защита кода от race conditions.
-- GIL защищает внутренности интерпретатора (подсчёт ссылок), но НЕ защищает от логических ошибок в пользовательском коде.
+- `threading.Lock` — logical protection of code from race conditions.
+- The GIL protects interpreter internals (reference counting) but does NOT protect against logical errors in user code.
 
-**Подробнее:**
-1. Только один поток выполняет байткод в каждый момент времени.
-2. CPU-bound задачи — потоки не помогают. I/O-bound — помогают (GIL отпускается ядром ОС на время системного вызова I/O).
-3. Обходы GIL:
-- `multiprocessing` — отдельный интерпретатор на каждый процесс
-- C-расширения (NumPy, Pillow) — явно освобождают GIL внутри тяжёлых вычислений
-- free-threaded CPython (Python 3.13+, PEP 703, экспериментально)
+**In depth:**
+1. Only one thread executes bytecode at any given moment.
+2. CPU-bound tasks — threads don't help. I/O-bound — they do (GIL is released by the OS kernel during I/O syscalls).
+3. GIL workarounds:
+- `multiprocessing` — separate interpreter per process
+- C extensions (NumPy, Pillow) — explicitly release the GIL during heavy computation
+- Free-threaded CPython (Python 3.13+, PEP 703, experimental)
 
 !!! warning
-    `asyncio` НЕ обходит GIL — он однопоточный и не нуждается в параллельных потоках.
+    `asyncio` does NOT bypass the GIL — it is single-threaded and doesn't need parallel threads.
 
 🔗 [https://www.youtube.com/watch?v=AWX4JnAnjBE](https://www.youtube.com/watch?v=AWX4JnAnjBE)
 
 ---
 
-### Управление памятью в Python
+### Memory Management in Python
 
-**Краткий ответ:**
-arena (256 KB) → пул (4 KB) → блок (8–512 B для одного объекта).
+**Short answer:**
+arena (256 KB) → pool (4 KB) → block (8–512 B per object).
 
 !!! warning
-    Минимальный блок — 8 байт (кратные 8: 8, 16, 24, ..., 512). Не 16.
+    Minimum block size is 8 bytes (multiples of 8: 8, 16, 24, ..., 512). Not 16.
 
-Объект удаляется, когда счётчик ссылок = 0.
-`sys.getrefcount()` возвращает n+1 (сама функция держит ссылку).
-Числа -5..255 и интернированные строки — одиночки (один объект в памяти).
-`__del__` вызывается перед удалением; `del` уменьшает refcount на 1.
-Объекты > 512 B → память запрашивается напрямую у ОС.
+An object is destroyed when its reference count reaches 0.
+`sys.getrefcount()` returns n+1 (the function itself holds a reference).
+Integers -5..255 and interned strings are singletons (one object in memory).
+`__del__` is called before deletion; `del` decrements refcount by 1.
+Objects > 512 B → memory requested directly from the OS.
 
-**Как аллокатор выбирает арену:**
-Новый объект — в самую ЗАПОЛНЕННУЮ арену. Цель: освобождать пустые арены как можно быстрее.
+**How the allocator picks an arena:**
+New object goes into the most OCCUPIED arena. Goal: free empty arenas as fast as possible.
 
-**Сборщик мусора:**
-Помимо reference counting — cyclic GC (модуль `gc`) для обнаружения циклических ссылок.
+**Garbage collector:**
+Beyond reference counting — cyclic GC (`gc` module) to detect circular references.
 
 ---
 
-### Генераторы, итераторы, итерируемые объекты
+### Generators, Iterators, Iterables
 
-- Итерируемый объект — реализует `__iter__` (list, dict, str, set, range...)
-- Итератор — реализует `__next__`; при исчерпании бросает `StopIteration`
-- Генератор — функция с `yield`; автоматически является итератором; ленивые вычисления
+- Iterable — implements `__iter__` (list, dict, str, set, range...)
+- Iterator — implements `__next__`; raises `StopIteration` when exhausted
+- Generator — function with `yield`; automatically an iterator; lazy evaluation
 
 **List comprehension vs Generator expression:**
-- `[x**2 for x in nums]` — весь список сразу в памяти
-- `(x**2 for x in nums)` — по одному элементу; для больших/бесконечных последовательностей
+- `[x**2 for x in nums]` — full list in memory at once
+- `(x**2 for x in nums)` — one element at a time; better for large/infinite sequences
 
 ---
 
-### Корутины и asyncio
+### Coroutines and asyncio
 
-**Краткий ответ:**
-Корутина — функция, выполнение которой можно приостановить (`await`) и возобновить.
-`asyncio` = кооперативная многозадачность: задачи сами решают, когда отдать управление.
+**Short answer:**
+A coroutine is a function whose execution can be suspended (`await`) and resumed.
+`asyncio` = cooperative multitasking: tasks decide themselves when to yield control.
 
 **async vs thread vs process:**
-- Корутины: самые лёгкие, один поток, нет переключения контекста ОС
-- Потоки: поток ОС + GIL; хорошо для I/O-bound
-- Процессы: отдельный интерпретатор, нет GIL; хорошо для CPU-bound
+- Coroutines: lightest, single thread, no OS context switching
+- Threads: OS thread + GIL; good for I/O-bound
+- Processes: separate interpreter, no GIL; good for CPU-bound
 
-**Почему в asyncio меньше нужны Lock/Mutex:**
-Один поток. Гонок данных нет, пока нет `await` между обращениями к shared state.
+**Why asyncio needs fewer Lock/Mutex:**
+Single thread. No data races as long as there's no `await` between accesses to shared state.
 
 ---
 
-### Декораторы
+### Decorators
 
-Декоратор — callable, принимает функцию, возвращает другую. Синтаксический сахар для `func = decorator(func)`.
+A decorator is a callable that takes a function and returns another. Syntactic sugar for `func = decorator(func)`.
 
-- `@functools.wraps(func)` — сохраняет `__name__`, `__doc__` и др.
-- `@staticmethod` — без `self`, нет доступа к экземпляру или классу
-- `@classmethod` — первый аргумент `cls` (класс); альтернативные конструкторы
-- `@property` — превращает метод в управляемый атрибут (геттер/сеттер без явного вызова)
+`@functools.wraps(func)` — preserves `__name__`, `__doc__`, etc.
+`@staticmethod` — no `self`, no access to instance or class
+`@classmethod` — first argument is `cls` (class); used for alternative constructors
+`@property` — turns a method into a managed attribute (getter/setter without explicit call)
 
-**Декоратор с параметрами (3 уровня вложенности):**
+**Decorator with parameters (3 nesting levels):**
 
 ```python
 def repeat(n):
@@ -103,72 +103,67 @@ def greet(name):
 
 ---
 
-### Контекстные менеджеры
+### Context Managers
 
-Реализовать `__enter__` и `__exit__`.
+Implement `__enter__` and `__exit__`.
+- `__enter__`: called on `with` entry; returns the managed object
+- `__exit__(exc_type, exc_value, traceback)`: called on exit; return `True` to suppress the exception
 
-- `__enter__`: вызывается при входе в `with`; возвращает управляемый объект
-- `__exit__(exc_type, exc_value, traceback)`: вызывается при выходе; `True` — подавить исключение
-
-Альтернатива: `@contextlib.contextmanager` с `yield`.
+Alternative: `@contextlib.contextmanager` with `yield`.
 
 ---
 
-### Типы данных: list, dict, set, tuple
+### Data Types: list, dict, set, tuple
 
-**dict — хеш-таблица:**
-Коллизии — метод открытой адресации (random probing).
-Python 3.6+: компактная раскладка — индексы отдельно, записи отдельно → экономия ~58% памяти.
-Расширяется при 2/3 заполненности.
+**dict — hash table:**
+Collisions handled via open addressing (random probing).
+Python 3.6+: compact layout — indices separate from entries → ~58% memory savings.
+Resizes at 2/3 capacity.
 
-Оптимизация сравнения при коллизии:
-
+Comparison optimisation on collision:
 ```python
-if id(key) == id(entity): return True    # один и тот же объект
-if hash(key) != hash(entity): return False  # разные хеши
-return key == entity                     # полное сравнение
+if id(key) == id(entity): return True
+if hash(key) != hash(entity): return False
+return key == entity
 ```
 
-**set:** неупорядоченный, неиндексируемый. Только hashable-элементы.
+**set:** unordered, unindexed. Only hashable elements.
 
 **is vs ==:**
-- `is` — одна ли ячейка памяти (`id()`)
-- `==` — равенство значений (`__eq__`)
+- `is` — same memory address (`id()`)
+- `==` — value equality (`__eq__`)
 
 **copy vs deepcopy:**
-- `copy.copy()` — поверхностное: вложенные объекты — те же ссылки
-- `copy.deepcopy()` — рекурсивно копирует все вложенные объекты
+- `copy.copy()` — shallow: nested objects are shared references
+- `copy.deepcopy()` — recursively copies all nested objects
 
 ---
 
 ### __slots__
 
-Заменяет `__dict__` экземпляра на фиксированный набор слотов → меньше памяти, быстрее доступ к атрибутам.
-Минус: нет динамических атрибутов, сложнее множественное наследование.
+Replaces the instance `__dict__` with a fixed set of slots → less memory, faster attribute access.
+Downside: no dynamic attributes, more complex multiple inheritance.
 
 ```python
 class Point:
     __slots__ = ('x', 'y')
-
     def __init__(self, x, y):
         self.x, self.y = x, y
 ```
 
 ---
 
-### Дескрипторы
+### Descriptors
 
-Объекты, реализующие `__get__`, `__set__`, `__delete__` — управляют доступом к атрибутам класса.
-На них основаны `@property`, `@classmethod`, `@staticmethod`, поля ORM.
+Objects implementing `__get__`, `__set__`, `__delete__` — control access to class attributes.
+`@property`, `@classmethod`, `@staticmethod`, ORM fields are all built on descriptors.
 
 ```python
 class Validator:
     def __set_name__(self, owner, name):
         self.name = name
-
     def __get__(self, obj, objtype=None):
         return obj.__dict__.get(self.name)
-
     def __set__(self, obj, value):
         if not isinstance(value, int):
             raise TypeError(f"{self.name} must be int")
@@ -196,14 +191,14 @@ class Circle(Shape):
     def area(self) -> float:
         return 3.14159 * self.radius ** 2
 
-# Shape()   → TypeError: нельзя создать экземпляр абстрактного класса
+# Shape()   → TypeError: can't instantiate abstract class
 c = Circle(5)
 print(c.area())  # 78.53975
 ```
 
-### Protocol (структурная типизация)
+### Protocol (structural typing)
 
-`Protocol` решает ту же задачу без наследования — класс удовлетворяет протоколу, просто реализуя нужные методы (duck typing + статическая проверка типов).
+`Protocol` achieves the same goal without inheritance — a class satisfies a Protocol simply by implementing the required methods (duck typing + static type checking).
 
 ```python
 from typing import Protocol
@@ -222,42 +217,42 @@ class Square:
 def render(shape: Drawable) -> None:
     shape.draw()
 
-render(Circle())  # ✓ — наследование не нужно
+render(Circle())  # ✓ — no inheritance required
 render(Square())  # ✓
 
-# Ключевое отличие от ABC:
-# ABC      — проверка при создании экземпляра (runtime)
-# Protocol — проверка mypy/pyright на этапе type-check, без runtime-enforcement
+# Key difference from ABC:
+# ABC  — enforced at instantiation time (runtime)
+# Protocol — checked by mypy/pyright at type-check time, no runtime enforcement
 ```
 
 ---
 
-### Аннотации типов (typing)
+### Type Annotations (typing)
 
 ```python
 int, str, list[int], dict[str, Any]
 Optional[str]           # = str | None
 Callable[[int, str], bool]
-Protocol                # структурный интерфейс (duck typing + static check)
+Protocol                # structural interface (duck typing + static check)
 ```
 
-#### TypeVar и Generic
+#### TypeVar and Generic
 
-`TypeVar` объявляет placeholder-тип, который конкретизируется при вызове. `Generic[T]` делает класс параметрическим по этому placeholder-у.
+`TypeVar` declares a placeholder type that gets resolved at call time. `Generic[T]` makes a class parametric over that placeholder.
 
 ```python
 from typing import TypeVar, Generic
 
 T = TypeVar('T')
 
-# Обобщённая функция — T выводится из аргумента
+# Generic function — T is inferred from the argument
 def first(items: list[T]) -> T:
     return items[0]
 
-first([1, 2, 3])      # T = int   → возвращает int
-first(['a', 'b'])     # T = str   → возвращает str
+first([1, 2, 3])      # T = int   → returns int
+first(['a', 'b'])     # T = str   → returns str
 
-# Обобщённый класс — T задаётся при создании экземпляра
+# Generic class — T is set when the class is instantiated
 class Box(Generic[T]):
     def __init__(self, value: T) -> None:
         self.value = value
@@ -269,111 +264,69 @@ box: Box[int] = Box(42)
 print(box.unwrap())   # 42
 ```
 
-**Ограниченный TypeVar** — ограничить T конкретным типом или его подклассами:
+**Bounded TypeVar** — restrict T to a specific type or its subclasses:
 
 ```python
 from typing import TypeVar
 from numbers import Number
 
-N = TypeVar('N', bound=Number)   # T должен быть Number или подклассом
+N = TypeVar('N', bound=Number)   # T must be Number or a subclass
 
 def add(a: N, b: N) -> N:
-    return a + b
+    return a + b   # type: ignore
 
-add(1, 2)       # ✓ int — это Number
-add(1.0, 2.0)   # ✓ float — это Number
-# add("a", "b") # ✗ ошибка mypy: str не является Number
+add(1, 2)       # ✓ int is a Number
+add(1.0, 2.0)   # ✓ float is a Number
+# add("a", "b") # ✗ mypy error: str is not a Number
 ```
 
-**Новый синтаксис Python 3.12+** — та же семантика, без импорта:
+**Python 3.12+ new syntax** — identical semantics, no import needed:
 
 ```python
-# Старый способ
+# Old way
 T = TypeVar('T')
 class Box(Generic[T]): ...
 
-# Новый способ (Python 3.12+) — идентичная семантика, чище
+# New way (Python 3.12+) — same semantics, cleaner syntax
 class Box[T]: ...
 class Pair[K, V]: ...
 class Repository[S: Serializable]: ...  # bound
 ```
 
-Проверка: `mypy`, `pyright`
-
----
-
-### Аннотации и dataclass: как это работает внутри
-
-В Python аннотации — это подсказки типов, которые пишутся через `:` после имени переменной:
-
-```python
-from dataclasses import dataclass
-
-@dataclass
-class Point:
-    x: float      # ← аннотация
-    y: float      # ← аннотация
-    label: str = "origin"  # ← аннотация + значение по умолчанию
-```
-
-`dataclass` читает `__annotations__` класса — обычный словарь, который Python автоматически заполняет при разборе класса:
-
-```python
->>> Point.__annotations__
-{'x': <class 'float'>, 'y': <class 'float'>, 'label': <class 'str'>}
-```
-
-На основе этого словаря декоратор генерирует методы автоматически:
-
-```python
-# Что dataclass создаёт под капотом:
-
-def __init__(self, x: float, y: float, label: str = "origin"):
-    self.x = x
-    self.y = y
-    self.label = label
-
-def __repr__(self):
-    return f"Point(x={self.x!r}, y={self.y!r}, label={self.label!r})"
-
-def __eq__(self, other):
-    return (self.x, self.y, self.label) == (other.x, other.y, other.label)
-```
-
-То есть «из аннотаций» означает: декоратор смотрит на `x: float`, `y: float` — вот поля, вот их типы — и по ним строит код методов. Без аннотаций `dataclass` просто не увидит поля.
+Checkers: `mypy`, `pyright`
 
 ---
 
 ### functools
 
-#### @lru_cache и @cache
+#### @lru_cache and @cache
 
 ```python
 from functools import lru_cache, cache
 
-# lru_cache — ограниченный: вытесняет наименее используемые при достижении maxsize
+# lru_cache — bounded: evicts least-recently-used when maxsize is reached
 @lru_cache(maxsize=128)
 def fibonacci(n: int) -> int:
     if n < 2:
         return n
     return fibonacci(n - 1) + fibonacci(n - 2)
 
-print(fibonacci(50))          # быстро — результаты кэшированы
+print(fibonacci(50))          # fast — results are cached
 print(fibonacci.cache_info()) # CacheInfo(hits=48, misses=51, maxsize=128, currsize=51)
-fibonacci.cache_clear()       # сбросить кэш
+fibonacci.cache_clear()       # reset the cache
 
-# cache — неограниченный (Python 3.9+), аналог lru_cache(maxsize=None)
+# cache — unbounded (Python 3.9+), equivalent to lru_cache(maxsize=None)
 @cache
 def factorial(n: int) -> int:
     return 1 if n == 0 else n * factorial(n - 1)
 ```
 
 !!! warning
-    Использовать только для **чистых функций** — одинаковые аргументы всегда должны давать одинаковый результат. Никогда не кэшировать функции с side-эффектами или зависящие от изменяемого состояния.
+    Only use on **pure functions** — same arguments must always produce the same result. Never cache functions with side effects or that depend on mutable state.
 
 #### partial
 
-Фиксирует часть аргументов функции, возвращая новый callable с меньшим числом параметров:
+Fixes some arguments of a function, returning a new callable with fewer parameters:
 
 ```python
 from functools import partial
@@ -387,67 +340,69 @@ cube   = partial(power, exponent=3)
 print(square(5))   # 25
 print(cube(3))     # 27
 
-# Удобно для колбэков и функций высшего порядка
+# Useful for callbacks and higher-order functions
 numbers = [1, 2, 3, 4, 5]
+multiply_by_10 = partial(map, partial(power, exponent=1))  # trivial example
 print(list(map(square, numbers)))  # [1, 4, 9, 16, 25]
 ```
 
 #### reduce
 
-Левая свёртка — применяет бинарную функцию накопительно, сворачивая последовательность в одно значение:
+Left fold — applies a binary function cumulatively to reduce a sequence to a single value:
 
 ```python
 from functools import reduce
 
-# Сумма без встроенного sum()
+# Sum without built-in sum()
 result = reduce(lambda acc, x: acc + x, [1, 2, 3, 4, 5])
 print(result)   # 15  →  ((((1+2)+3)+4)+5)
 
-# Произведение
+# Product
 product = reduce(lambda acc, x: acc * x, [1, 2, 3, 4, 5])
 print(product)  # 120
 
-# Разворачивание вложенного списка
+# Flatten nested list
 nested = [[1, 2], [3, 4], [5, 6]]
 flat = reduce(lambda acc, x: acc + x, nested)
 print(flat)     # [1, 2, 3, 4, 5, 6]
 
-# С начальным значением (защита от ошибки на пустой последовательности)
-reduce(lambda acc, x: acc + x, [], 0)   # 0 (не ошибка)
+# With initial value (avoids error on empty sequence)
+reduce(lambda acc, x: acc + x, [], 0)   # 0 (not an error)
 ```
 
-**Когда лучше использовать альтернативы:**
-- `sum()` вместо `reduce(lambda a, b: a + b, ...)`
-- `itertools.chain.from_iterable()` вместо `reduce` для разворачивания
-- `reduce` — когда нет встроенного для конкретной логики накопления
+**When to prefer alternatives:**
+- `sum()` over `reduce(lambda a, b: a + b, ...)`
+- `itertools.chain.from_iterable()` over `reduce` for flattening
+- Use `reduce` when there's no built-in for the specific accumulation logic
 
 ---
 
 ### collections
 
-```python
-defaultdict(list)    # dict с фабрикой по умолчанию; нет KeyError
-Counter(iterable)    # подсчёт элементов; поддерживает арифметику
-deque(maxlen=N)      # O(1) append/pop с обоих концов; лучше list для очередей
-OrderedDict          # сохраняет порядок вставки + move_to_end
-namedtuple           # лёгкий иммутабельный record с именованными полями
-```
+`defaultdict(list)` — dict with a default factory; no `KeyError`
+`Counter(iterable)` — element counting; supports arithmetic
+`deque(maxlen=N)` — O(1) append/pop from both ends; better than list for queues
+`OrderedDict` — preserves insertion order + `move_to_end`
+`namedtuple` — lightweight immutable record with named fields
 
 ---
 
-### Алгоритмическая сложность
+### Algorithmic Complexity
 
-- list: O(1) доступ по индексу, O(n) поиск, O(1) амортизированный append
-- dict/set: O(1) средний поиск/вставка, O(n) худший случай
+- list: O(1) index access, O(n) search, O(1) amortised append
+- dict/set: O(1) average search/insert, O(n) worst case
 - Big O: O(1) → O(log n) → O(n) → O(n log n) → O(n²) → O(2ⁿ)
 
 ---
 
-### type() и Метаклассы
+### type() and Metaclasses
 
-**Краткий ответ:**
-`type` — метакласс для создания классов. Все классы в Python — объекты, созданные через `type`.
-`type(name, bases, attrs)` — создаёт новый класс динамически.
+**Short answer:**
+`type` is the metaclass for creating classes. All classes in Python are objects created via `type`.
+`type(name, bases, attrs)` — creates a new class dynamically.
+
+**Metaclasses:**
+A metaclass controls class creation. It defines `__new__(cls, name, bases, attrs)`.
 
 ```python
 class MyMeta(type):
@@ -461,11 +416,11 @@ class MyClass(metaclass=MyMeta):
 print(MyClass.custom_attr)  # 42
 ```
 
-Применение: ORM (Django Models), API-фреймворки, валидация классов.
+Use cases: ORM (Django Models), API frameworks, class validation.
 
 ---
 
-### Динамический импорт модуля
+### Dynamic Module Import
 
 ```python
 import importlib.util
@@ -475,6 +430,134 @@ def import_module_from_path(path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+```
+
+---
+
+### Exception chaining and custom hierarchies
+
+```python
+# raise X from Y — explicit chaining (preserves original traceback)
+try:
+    result = db.query(sql)
+except DatabaseError as e:
+    raise ServiceUnavailableError("DB unreachable") from e
+# → ServiceUnavailableError: DB unreachable
+#   The above exception was the direct cause of the following exception:
+#   DatabaseError: connection refused
+
+# raise X from None — suppress original exception context
+try:
+    value = int(user_input)
+except ValueError:
+    raise ValidationError("Expected an integer") from None
+
+# Custom exception hierarchy
+class AppError(Exception):
+    """Base for all application errors."""
+
+class ValidationError(AppError):
+    def __init__(self, field: str, message: str):
+        self.field = field
+        super().__init__(f"{field}: {message}")
+
+class NotFoundError(AppError):
+    pass
+
+class ServiceUnavailableError(AppError):
+    pass
+
+# Catch at the right level
+try:
+    process(data)
+except ValidationError as e:
+    return 422, {"field": e.field, "error": str(e)}
+except NotFoundError:
+    return 404, {"error": "not found"}
+except AppError:
+    return 500, {"error": "internal error"}
+```
+
+---
+
+### contextlib: suppress and ExitStack
+
+```python
+from contextlib import suppress, ExitStack
+
+# suppress — silently ignore specific exceptions
+with suppress(FileNotFoundError):
+    os.remove('tmp.txt')   # no error if file doesn't exist
+
+# ExitStack — dynamic number of context managers
+def process_files(paths: list[str]):
+    with ExitStack() as stack:
+        files = [stack.enter_context(open(p)) for p in paths]
+        # all files closed automatically, even if one fails mid-loop
+        for f in files:
+            process(f.read())
+
+# Useful when you don't know at write-time how many CMs you need
+```
+
+---
+
+### weakref
+
+A weak reference doesn't prevent an object from being garbage collected.
+
+```python
+import weakref
+
+class Cache:
+    def __init__(self):
+        self._data = {}   # strong refs — objects kept alive by cache
+
+class WeakCache:
+    def __init__(self):
+        self._data = weakref.WeakValueDictionary()   # weak refs — GC can collect values
+
+obj = MyObject()
+cache = WeakCache()
+cache._data['key'] = obj
+del obj                    # refcount → 0; GC collects it
+print(cache._data.get('key'))  # None — automatically removed
+
+# Use cases:
+# - Caches that shouldn't prevent GC (avoid memory leaks)
+# - Observer/callback registries (don't keep dead objects alive)
+# - __weakref__ must be in __slots__ if you use __slots__
+```
+
+---
+
+### Python internals: bytecode and import system
+
+```python
+# dis — inspect bytecode
+import dis
+
+def add(a, b):
+    return a + b
+
+dis.dis(add)
+#   2           0 RESUME          0
+#   3           2 LOAD_FAST       0 (a)
+#               4 LOAD_FAST       1 (b)
+#               6 BINARY_OP      0 (+)
+#              10 RETURN_VALUE
+
+# Import system
+import sys
+print(sys.modules.keys())          # all currently imported modules
+print(sys.path)                    # directories Python searches for modules
+
+# __all__ — controls what 'from module import *' exports
+# mymodule.py
+__all__ = ['PublicClass', 'public_function']   # private_helper not exported
+
+# Namespace packages (PEP 420) — directory without __init__.py
+# Allows splitting a package across multiple directories/distributions
 ```
 
 ---

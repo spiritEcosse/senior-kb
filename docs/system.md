@@ -1,16 +1,16 @@
-## 9. Системное программирование
+## 9. System Programming
 
 ### POSIX
 
-Стандарт совместимости UNIX-подобных систем. Определяет API для файлов, процессов, сигналов, потоков.
-Python-модули: `os`, `signal`, `threading`, `subprocess`, `socket`.
+Compatibility standard for UNIX-like systems. Defines APIs for files, processes, signals, and threads.
+Python modules: `os`, `signal`, `threading`, `subprocess`, `socket`.
 
-### Открытые порты в Linux
+### Open Ports in Linux
 
 ```bash
-ss -tlnp        # рекомендуется
-netstat -tlnp   # устаревший, но распространённый
-lsof -i -P -n   # список открытых сокетов
+ss -tlnp        # recommended
+netstat -tlnp   # older but widely available
+lsof -i -P -n   # list open sockets
 ```
 
 ---

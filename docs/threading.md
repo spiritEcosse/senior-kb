@@ -1,29 +1,29 @@
 # Threading vs asyncio vs Multiprocessing
 
-## Суть проблемы
+## The core problem
 
-В Python три модели конкурентности. Неправильный выбор стоит производительности; правильный — разница в 10 раз.
+Python has three concurrency models. Picking the wrong one costs performance; picking the right one is a 10x difference.
 
-Корень различий — **GIL**: только один поток выполняет байт-код Python в каждый момент. Это делает `threading` бесполезным для CPU-bound задач, но нормальным для I/O-bound (GIL отпускается во время системных вызовов I/O).
+The root cause of the distinction is the **GIL**: only one thread executes Python bytecode at a time. This makes `threading` useless for CPU-bound work but fine for I/O-bound work (the GIL is released during I/O syscalls).
 
 ---
 
-## Быстрый выбор
+## Quick decision guide
 
-| Задача | Используй |
+| Workload | Use |
 |---|---|
-| Много сетевых запросов / запросов в БД | `asyncio` |
-| Блокирующий I/O, который нельзя сделать async | `threading` |
-| Тяжёлые вычисления (ML, обработка изображений) | `multiprocessing` |
-| CPU + I/O вместе | `multiprocessing` + `asyncio` внутри каждого воркера |
+| Many network requests / DB queries | `asyncio` |
+| Blocking I/O you can't make async | `threading` |
+| CPU-heavy computation (ML, image processing) | `multiprocessing` |
+| Mix of CPU + I/O | `multiprocessing` + `asyncio` inside each worker |
 
 ---
 
 ## threading
 
-Поток — единица выполнения на уровне ОС, разделяющая общую память. GIL означает, что только один поток выполняет байт-код Python одновременно, но потоки действительно выполняются параллельно во время ожидания I/O.
+A thread is an OS-level execution unit sharing the same memory space. The GIL means only one thread runs Python bytecode at a time, but threads genuinely run in parallel during I/O waits.
 
-**Когда использовать:** блокирующие I/O-вызовы, которые нельзя `await` (legacy-библиотеки, `subprocess`).
+**When to use:** blocking I/O calls you can't `await` (legacy libraries, `subprocess`, `time.sleep` in tests).
 
 ```python
 import threading
@@ -32,7 +32,7 @@ import requests
 results = {}
 
 def fetch(url):
-    results[url] = requests.get(url).status_code  # блокирующий — GIL отпускается при ожидании сети
+    results[url] = requests.get(url).status_code  # blocking — GIL released during network wait
 
 urls = ["https://httpbin.org/get"] * 5
 threads = [threading.Thread(target=fetch, args=(url,)) for url in urls]
@@ -41,7 +41,7 @@ for t in threads: t.join()
 print(results)
 ```
 
-**ThreadPoolExecutor (предпочтительнее):**
+**ThreadPoolExecutor (preferred):**
 
 ```python
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -56,7 +56,7 @@ with ThreadPoolExecutor(max_workers=5) as pool:
         print(url, future.result().status_code)
 ```
 
-**Разделяемое состояние требует блокировок:**
+**Shared state requires locking:**
 
 ```python
 import threading
@@ -67,26 +67,26 @@ lock = threading.Lock()
 def increment():
     global counter
     with lock:
-        counter += 1  # read-modify-write не атомарен
+        counter += 1  # read-modify-write is not atomic
 
 threads = [threading.Thread(target=increment) for _ in range(1000)]
 for t in threads: t.start()
 for t in threads: t.join()
-print(counter)  # 1000 ✓ (без lock: непредсказуемо)
+print(counter)  # 1000 ✓ (without lock: unpredictable)
 ```
 
-**Подводные камни:**
-- Race conditions при изменении общего состояния
-- Deadlock при захвате нескольких блокировок в разном порядке
-- Overhead памяти: ~8 МБ стека на поток по умолчанию в Linux
+**Pitfalls:**
+- Race conditions on shared mutable state
+- Deadlocks when multiple locks are acquired in different order
+- Memory overhead: ~8 MB stack per thread by default on Linux
 
 ---
 
 ## asyncio
 
-Однопоточная кооперативная многозадачность. Корутина добровольно отдаёт управление на каждом `await`, позволяя event loop запустить другую корутину. Нет конкуренции за GIL, нет переключений контекста ОС — очень дёшево.
+Single-threaded cooperative multitasking. A coroutine voluntarily yields control at every `await`, allowing the event loop to run another coroutine. No GIL contention, no OS context switches — extremely cheap.
 
-**Когда использовать:** высококонкурентный I/O (тысячи HTTP-запросов, WebSocket-соединений, запросов в БД с async-драйвером).
+**When to use:** high-concurrency I/O (thousands of HTTP calls, WebSocket connections, DB queries with an async driver).
 
 ```python
 import asyncio
@@ -108,29 +108,29 @@ async def main():
 asyncio.run(main())
 ```
 
-**Event loop: что происходит на самом деле**
+**Event loop: what actually happens**
 
 ```
 event loop
-  ├── корутина A: await network_call()  → приостановлена, loop идёт дальше
-  ├── корутина B: await db_query()      → приостановлена, loop идёт дальше
-  ├── корутина C: await asyncio.sleep() → приостановлена, loop идёт дальше
-  └── network_call() завершился → A возобновляется
+  ├── coroutine A: await network_call()  → suspended, loop moves on
+  ├── coroutine B: await db_query()      → suspended, loop moves on
+  ├── coroutine C: await asyncio.sleep() → suspended, loop moves on
+  └── network_call() completes → A resumes
 ```
 
-Параллелизма нет — но и ожидания нет. 1000 одновременных запросов стоят примерно столько же, сколько 10.
+No parallelism — but no waiting either. 1000 concurrent requests cost roughly the same as 10.
 
-**Паттерны fan-out:**
+**Fan-out patterns:**
 
 ```python
-# gather: все задачи, результаты по порядку, отменяет «соседей» при исключении
+# gather: all tasks, results in order, cancels siblings on exception
 results = await asyncio.gather(fetch(url1), fetch(url2), fetch(url3))
 
-# gather толерантный: собирать ошибки вместо исключения
+# gather tolerant: collect errors instead of raising
 results = await asyncio.gather(*tasks, return_exceptions=True)
 errors = [r for r in results if isinstance(r, Exception)]
 
-# wait: тонкий контроль — остановить при первом завершении или первой ошибке
+# wait: fine-grained — stop on first completion or first failure
 done, pending = await asyncio.wait(
     [asyncio.create_task(t) for t in tasks],
     return_when=asyncio.FIRST_EXCEPTION
@@ -138,26 +138,26 @@ done, pending = await asyncio.wait(
 for p in pending:
     p.cancel()
 
-# semaphore: ограничить конкурентность (например, соблюдать rate limit)
+# semaphore: limit concurrency (e.g. respect rate limits)
 sem = asyncio.Semaphore(10)
 async def fetch_limited(url):
     async with sem:
         return await fetch(url)
 ```
 
-**Подводные камни:**
-- Любой блокирующий вызов (`requests.get`, `time.sleep`, CPU-работа) замораживает весь event loop
-- Используй `asyncio.to_thread()` для переноса блокирующих вызовов в поток:
+**Pitfalls:**
+- Any blocking call (`requests.get`, `time.sleep`, CPU work) blocks the entire event loop
+- Use `asyncio.to_thread()` to offload blocking calls:
 
 ```python
 import asyncio, time
 
 def blocking_work():
-    time.sleep(2)          # заморозило бы loop
+    time.sleep(2)          # would freeze the loop
     return "done"
 
 async def main():
-    result = await asyncio.to_thread(blocking_work)  # выполняется в пуле потоков
+    result = await asyncio.to_thread(blocking_work)  # runs in a thread pool
     print(result)
 ```
 
@@ -165,24 +165,25 @@ async def main():
 
 ## multiprocessing
 
-Запускает отдельные процессы интерпретатора Python — у каждого свой GIL, своя память, своя куча. Настоящий параллелизм для CPU-bound задач. Межпроцессное взаимодействие (IPC) через `Queue`, `Pipe` или разделяемую память.
+Spawns separate Python interpreter processes — each has its own GIL, own memory space, own heap. True parallelism for CPU-bound work. Inter-process communication (IPC) via `Queue`, `Pipe`, or shared memory.
 
-**Когда использовать:** CPU-bound работа — числовые вычисления, обработка изображений, ML-инференс, парсинг больших файлов.
+**When to use:** CPU-bound work — number crunching, image processing, ML inference, parsing large files.
 
 ```python
 from multiprocessing import Pool
 import os
 
 def cpu_task(n):
+    # simulate heavy computation
     return sum(i * i for i in range(n))
 
-if __name__ == "__main__":   # обязательно на Windows / macOS (spawn start method)
+if __name__ == "__main__":   # required on Windows / macOS (spawn start method)
     with Pool(processes=os.cpu_count()) as pool:
         results = pool.map(cpu_task, [10_000_000] * 8)
     print(results)
 ```
 
-**ProcessPoolExecutor (API concurrent.futures):**
+**ProcessPoolExecutor (concurrent.futures API):**
 
 ```python
 from concurrent.futures import ProcessPoolExecutor
@@ -191,13 +192,26 @@ import os
 def crunch(data):
     return sum(x ** 2 for x in data)
 
-chunks = [range(1_000_000) for _ in range(os.cpu_count())]
+chunks = [[range(1_000_000)] for _ in range(os.cpu_count())]
 
 with ProcessPoolExecutor() as pool:
     results = list(pool.map(crunch, chunks))
 ```
 
-**IPC через Queue:**
+**Sharing state between processes:**
+
+```python
+from multiprocessing import Value, Array, Lock
+
+counter = Value('i', 0)   # shared integer
+lock = Lock()
+
+def increment(counter, lock):
+    with lock:
+        counter.value += 1
+```
+
+**IPC with Queue:**
 
 ```python
 from multiprocessing import Process, Queue
@@ -214,25 +228,25 @@ results = [q.get() for _ in range(5)]
 print(results)
 ```
 
-**Подводные камни:**
-- Запуск процесса дорог (~100 мс); используй пулы, не процессы на каждую задачу
-- Объекты должны быть picklable для передачи между процессами (лямбды, локальные классы — нельзя)
-- Обязательна защита `if __name__ == "__main__"` на Windows/macOS
+**Pitfalls:**
+- Spawning processes is expensive (~100 ms); use pools, not per-task processes
+- Objects must be picklable to cross the process boundary (lambdas, local classes — cannot)
+- `if __name__ == "__main__"` guard is required on Windows/macOS
 
 ---
 
-## Комбинирование моделей
+## Combining models
 
-**asyncio + потоки** — выгрузить блокирующий вызов без заморозки loop:
+**asyncio + threads** — offload blocking calls without blocking the loop:
 
 ```python
 async def main():
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, blocking_io_call)
-    # None → стандартный ThreadPoolExecutor
+    # None → default ThreadPoolExecutor
 ```
 
-**asyncio + процессы** — CPU-работа внутри async-приложения:
+**asyncio + processes** — CPU work inside an async app:
 
 ```python
 from concurrent.futures import ProcessPoolExecutor
@@ -246,16 +260,16 @@ async def main():
 
 ---
 
-## Итоговое сравнение
+## Comparison summary
 
 | | `threading` | `asyncio` | `multiprocessing` |
 |---|---|---|---|
-| Параллелизм | Нет (GIL) | Нет (один поток) | Да |
-| Лучше для | Блокирующий I/O (legacy) | Async I/O (много соединений) | CPU-bound |
-| Overhead | ~8 МБ / поток | ~1 КБ / корутина | ~50 МБ / процесс |
-| Разделяемое состояние | Да (нужны lock-и) | Да (lock не нужен*) | Нет (нужен IPC) |
-| Сложность | Средняя | Средняя | Высокая |
+| Parallelism | No (GIL) | No (single thread) | Yes |
+| Best for | Blocking I/O (legacy) | Async I/O (many conns) | CPU-bound |
+| Overhead | ~8 MB / thread | ~1 KB / coroutine | ~50 MB / process |
+| Shared state | Yes (needs locks) | Yes (no locks needed*) | No (IPC required) |
+| Complexity | Medium | Medium | High |
 
-*при условии что между чтением и записью разделяемого состояния нет `await`
+*as long as there's no `await` between reads and writes to shared state
 
 ---

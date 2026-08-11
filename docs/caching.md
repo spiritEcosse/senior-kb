@@ -1,29 +1,29 @@
-## 6. Кэширование
+## 6. Caching
 
-### Стратегии кэширования
+### Caching Strategies
 
-Cache-Aside (Lazy Loading): запрос → промах → БД → записать в кэш. Самая распространённая.
-Write-Through: запись в кэш И в БД одновременно. Всегда согласовано; медленнее запись.
-Write-Behind: запись в кэш; асинхронный сброс в БД. Быстрая запись; риск потери данных.
-
----
-
-### Thread-safe кэш с TTL
-
-**Проблема — race condition в кэше:**
-
-```
-Поток 1: if url in self.cache     # нет → делает запрос
-Поток 2: if url in self.cache     # нет → делает запрос (дублирует!)
-Поток 1: self.cache[url] = data   # пишет
-Поток 2: self.cache[url] = data   # перезаписывает
-```
-
-GIL защищает простые операции, но не составные `read-check-write`.
+Cache-Aside (Lazy Loading): request → miss → DB → write to cache. Most common.
+Write-Through: write to cache AND DB simultaneously. Always consistent; slower writes.
+Write-Behind: write to cache; async flush to DB. Fast writes; risk of data loss.
 
 ---
 
-**Fix 1 — threading.Lock + ручной TTL:**
+### Thread-safe Cache with TTL
+
+**The problem — race condition in cache:**
+
+```
+Thread 1: if url in self.cache     # miss → makes request
+Thread 2: if url in self.cache     # miss → makes request (duplicate!)
+Thread 1: self.cache[url] = data   # writes
+Thread 2: self.cache[url] = data   # overwrites
+```
+
+Python's GIL protects simple operations but **not compound read-check-write sequences**.
+
+---
+
+**Fix 1 — threading.Lock + manual TTL:**
 
 ```python
 import threading
@@ -64,7 +64,7 @@ class APIClient:
 
 ---
 
-**Fix 2 — threading.local() (кэш per-thread):**
+**Fix 2 — threading.local() (per-thread cache):**
 
 ```python
 class APIClient:
@@ -78,11 +78,11 @@ class APIClient:
         return self._local.cache
 ```
 
-Каждый поток получает **свой кэш** — нет sharing, нет локов. Проще, но больше памяти.
+Each thread gets its **own cache** — no sharing, no locking needed. Simpler but uses more memory.
 
 ---
 
-**Fix 3 — cachetools.TTLCache + RLock (рекомендуется):**
+**Fix 3 — cachetools.TTLCache + RLock (recommended):**
 
 ```python
 from cachetools import TTLCache
@@ -92,8 +92,8 @@ class APIClient:
     def __init__(self, base_url):
         self.base_url = base_url
         self.cache = TTLCache(
-            maxsize=1000,   # макс. 1000 записей
-            ttl=60          # TTL 60 секунд
+            maxsize=1000,   # max 1000 entries
+            ttl=60          # 60 second TTL
         )
         self._cache_lock = RLock()
 
@@ -110,11 +110,11 @@ class APIClient:
         return data
 ```
 
-`TTLCache` управляет TTL и размером автоматически. `RLock` вместо `Lock` — можно захватить повторно из того же потока (безопаснее в сложных сценариях).
+`TTLCache` handles TTL and max size automatically. `RLock` instead of `Lock` — re-entrant, safer in complex call chains.
 
 ---
 
-### Инвалидация кэша через Django signals
+### Cache Invalidation via Django Signals
 
 ```python
 from django.db.models.signals import post_save
@@ -129,21 +129,21 @@ def invalidate_product_cache(sender, instance, **kwargs):
 
 ---
 
-### Redis: сценарии использования
+### Redis: Use Cases
 
-- Хранение сессий
+- Session storage
 - Rate limiting (`INCR` + `EXPIRE`)
 - Distributed lock (`SET NX PX`)
 - Pub/Sub
-- Лидерборды (Sorted Sets)
-- Очереди задач (List `LPUSH`/`BRPOP`, Redis Streams)
-- Кэш с TTL (cache-aside)
+- Leaderboards (Sorted Sets)
+- Task queues (List `LPUSH`/`BRPOP`, Redis Streams)
+- Cache with TTL (cache-aside)
 
 ---
 
 ### Rate Limiting
 
-**Fixed Window (простейший):**
+**Fixed Window (simplest):**
 
 ```python
 import redis
@@ -151,18 +151,18 @@ from time import time
 
 def is_allowed_fixed(user_id: str, limit: int = 100) -> bool:
     r = redis.Redis()
-    key = f"rate:{user_id}:{int(time() // 60)}"  # окно = 1 минута
+    key = f"rate:{user_id}:{int(time() // 60)}"  # 1 minute window
     count = r.incr(key)
     if count == 1:
         r.expire(key, 60)
     return count <= limit
 ```
 
-Проблема: двойной burst на границе окна (100 запросов в конце + 100 в начале следующего).
+Problem: double burst at window boundary (100 at end + 100 at start of next window).
 
 ---
 
-**Sliding Window (точнее):**
+**Sliding Window (more precise):**
 
 ```python
 def is_allowed_sliding(user_id: str, limit: int = 100) -> bool:
@@ -172,47 +172,47 @@ def is_allowed_sliding(user_id: str, limit: int = 100) -> bool:
     window_start = now - 60
 
     pipe = r.pipeline()
-    pipe.zremrangebyscore(key, 0, window_start)   # удалить старые
-    pipe.zadd(key, {str(now): now})               # добавить текущий
-    pipe.zcard(key)                                # посчитать
+    pipe.zremrangebyscore(key, 0, window_start)   # remove old entries
+    pipe.zadd(key, {str(now): now})               # add current
+    pipe.zcard(key)                                # count
     pipe.expire(key, 60)
     results = pipe.execute()
 
     return results[2] <= limit
 ```
 
-Sorted Set: score = timestamp. Точное скользящее окно, но O(log N) и больше памяти.
+Sorted Set: score = timestamp. Precise sliding window, but O(log N) and more memory.
 
 ---
 
-**Token Bucket (гибкий burst):**
+**Token Bucket (flexible burst):**
 
 ```python
-# Пользователь получает 100 токенов, пополнение 1.67/сек
-# Burst разрешён до размера bucket
-# Нет проблемы с границей окна
+# User gets 100 tokens, refilled at 1.67/sec
+# Burst allowed up to bucket size
+# No boundary problem
 ```
 
 ---
 
-**Nginx — глобальная защита на уровне IP:**
+**Nginx — global IP-level protection:**
 
 ```nginx
 limit_req_zone $binary_remote_addr zone=api:10m rate=100r/m;
 limit_req zone=api burst=20 nodelay;
 ```
 
-Работает до Django — нулевой overhead приложения. Ограничение: per-IP, не per-user. Проблемы с NAT, CDN.
+Works before Django — zero application overhead. Limitation: per-IP, not per-user. Problems with NAT, CDNs.
 
 ---
 
-**Выбор стратегии:**
+**Choosing a strategy:**
 
-| Сценарий | Подход |
+| Scenario | Approach |
 |---|---|
-| Общая защита API | Fixed window |
-| Финансовые / trading API | Sliding window |
-| Очень высокий трафик | Nginx / API Gateway |
-| Гибкий burst | Token bucket |
+| General API protection | Fixed window |
+| Financial / trading API | Sliding window |
+| Very high traffic | Nginx / API Gateway |
+| Flexible burst | Token bucket |
 
 ---

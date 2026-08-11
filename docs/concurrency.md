@@ -1,42 +1,42 @@
-## 3. Параллелизм и асинхронность
+## 3. Concurrency and Async
 
 ### Thread vs Process vs Async
 
 | | Thread | Process | Coroutine (async) |
 |---|---|---|---|
-| Изоляция памяти | Нет (shared) | Да | Нет (один поток) |
-| GIL | Да | Нет | Да (уступает сам) |
-| Подходит для | I/O-bound | CPU-bound | I/O-bound (много соединений) |
-| Стоимость | Средняя | Высокая | Очень низкая |
+| Memory isolation | No (shared) | Yes | No (single thread) |
+| GIL | Yes | No | Yes (yields voluntarily) |
+| Best for | I/O-bound | CPU-bound | I/O-bound (many conns) |
+| Cost | Medium | High | Very low |
 
-### Thread Pool и Process Pool
+### Thread Pool and Process Pool
 
-`ThreadPoolExecutor` (`concurrent.futures`) — для I/O-bound.
-`ProcessPoolExecutor` / `multiprocessing.Pool` — для CPU-bound; свой GIL в каждом процессе.
+`ThreadPoolExecutor` (`concurrent.futures`) — for I/O-bound.
+`ProcessPoolExecutor` / `multiprocessing.Pool` — for CPU-bound; own GIL per process.
 
-### asyncio: ключевые паттерны
+### asyncio: Key Patterns
 
 ```python
-# gather — запустить параллельно, вернуть результаты по порядку
+# gather — run concurrently, return results in order
 results = await asyncio.gather(fetch(url1), fetch(url2), fetch(url3))
 
-# gather с return_exceptions — не падать при ошибке одного
+# gather with return_exceptions — don't fail on one error
 results = await asyncio.gather(*tasks, return_exceptions=True)
 for r in results:
     if isinstance(r, Exception):
         logger.error(r)
 
-# create_task — фоновая задача (не блокирует)
+# create_task — background task (non-blocking)
 task = asyncio.create_task(background_job())
 
-# wait — точный контроль: FIRST_COMPLETED, FIRST_EXCEPTION, ALL_COMPLETED
+# wait — fine-grained control: FIRST_COMPLETED, FIRST_EXCEPTION, ALL_COMPLETED
 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
 
-# wait_for — таймаут
+# wait_for — timeout
 data = await asyncio.wait_for(fetch(url), timeout=5.0)
 
-# Lock, Semaphore — синхронизация
-async with asyncio.Semaphore(10):   # макс. 10 одновременных
+# Lock, Semaphore — synchronisation
+async with asyncio.Semaphore(10):   # max 10 concurrent
     await fetch(url)
 ```
 
@@ -44,44 +44,44 @@ async with asyncio.Semaphore(10):   # макс. 10 одновременных
 
 | | `gather` | `wait` |
 |---|---|---|
-| Вход | корутины | Task-объекты |
-| Отмена при ошибке | да (по умолчанию) | нет |
-| Когда использовать | простой fan-out | точный контроль |
+| Input | coroutines | Task objects |
+| Cancels on error | yes (default) | no |
+| Use when | simple fan-out | fine-grained control |
 
 ### asyncio.gather vs asyncio.create_task
 
 ```python
-# create_task — запланировать немедленно, не ждать
-task = asyncio.create_task(fetch(url))   # стартует сразу
-# ... другой код ...
-result = await task                       # дождаться результата
+# create_task — schedules immediately, doesn't block
+task = asyncio.create_task(fetch(url))   # starts immediately
+# ... other code ...
+result = await task                       # wait for result
 
-# await coroutine — выполнить последовательно (не параллельно!)
-result = await fetch(url)                 # блокирует до завершения
+# await coroutine — executes sequentially (NOT parallel!)
+result = await fetch(url)                 # blocks until done
 ```
 
-### Проблема позднего связывания в замыканиях
+### Late Binding in Closures
 
 ```python
-# Проблема: все функции захватывают одну переменную i
+# Problem: all functions capture the same variable i
 funcs = [lambda: i for i in range(3)]
-print([f() for f in funcs])  # [2, 2, 2] — не [0, 1, 2]!
+print([f() for f in funcs])  # [2, 2, 2] — not [0, 1, 2]!
 
-# Исправление: зафиксировать значение через аргумент по умолчанию
+# Fix: bind the value via a default argument
 funcs = [lambda i=i: i for i in range(3)]
 print([f() for f in funcs])  # [0, 1, 2] ✓
 ```
 
-### Профилировщики
+### Profilers
 
-- `cProfile` — встроенный, детальный анализ вызовов
-- `py-spy` — sampling profiler, работает без изменения кода, подходит для production
-- `line_profiler` — профилирование построчно
-- `memory_profiler` — потребление памяти в Python
-- `Intel VTune`, `Valgrind` — для C-расширений и многопоточного кода
+- `cProfile` — built-in, detailed call analysis
+- `py-spy` — sampling profiler, works without code changes, production-safe
+- `line_profiler` — line-by-line profiling
+- `memory_profiler` — Python memory usage profiling
+- `Intel VTune`, `Valgrind` — for C extensions and multithreaded code
 
 ```python
-# py-spy: запуск без изменения кода
+# py-spy: attach to running process without code changes
 # py-spy record -o profile.svg --pid 12345
 ```
 

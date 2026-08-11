@@ -1,59 +1,59 @@
-## 4. Базы данных
+## 4. Databases
 
 ### ACID
 
-A — Atomicity: всё или ничего
-C — Consistency: БД переходит из одного корректного состояния в другое
-I — Isolation: параллельные транзакции не мешают друг другу
-D — Durability: после коммита данные сохранены навсегда (WAL, диск)
+A — Atomicity: all or nothing
+C — Consistency: DB transitions from one valid state to another
+I — Isolation: concurrent transactions don't interfere
+D — Durability: after commit, data is persisted forever (WAL, disk)
 
-### Уровни изоляции транзакций
+### Transaction Isolation Levels
 
-1. Read Uncommitted — возможно «грязное чтение»
-2. Read Committed — только зафиксированные данные (по умолчанию: PostgreSQL, Oracle)
-3. Repeatable Read — прочитанные данные не меняются до конца транзакции; фантомное чтение возможно
-4. Serializable — максимальная изоляция; нет фантомного чтения
+1. Read Uncommitted — dirty reads possible
+2. Read Committed — only committed data visible (default: PostgreSQL, Oracle)
+3. Repeatable Read — read data doesn't change until transaction ends; phantom reads possible
+4. Serializable — maximum isolation; no phantom reads
 
-### Транзакция и ROLLBACK
+### Transactions and ROLLBACK
 
-Транзакция — логическая единица работы; атомарна.
-ROLLBACK — отмена всех изменений с начала транзакции (или с SAVEPOINT).
+A transaction is a logical unit of work; it is atomic.
+`ROLLBACK` — undoes all changes since the transaction began (or since a `SAVEPOINT`).
 
-### Виды индексов
+### Index Types
 
-1. Кластеризованный — физически упорядочивает строки; один на таблицу; листья = реальные данные
-2. Некластеризованный — листья = ключ + указатель; их может быть много
-3. Составной — несколько столбцов; важен порядок для prefix-запросов
-4. Уникальный — гарантирует уникальность
-5. Покрывающий — все нужные столбцы в индексе; без обращения к таблице
+1. Clustered — physically orders rows; one per table; leaf pages = actual data
+2. Non-clustered — leaf pages = key + pointer; many allowed
+3. Composite — multiple columns; column order matters for prefix queries
+4. Unique — enforces uniqueness
+5. Covering — all needed columns in the index; no table lookup required
 
 🔗 [https://habr.com/ru/post/247373/](https://habr.com/ru/post/247373/)
 
-### N+1 проблема в ORM
+### N+1 Problem in ORM
 
 ```python
-books = Book.objects.all()           # 1 запрос
+books = Book.objects.all()       # 1 query
 for book in books:
-    print(book.author.name)          # N запросов (по одному на книгу)
+    print(book.author.name)      # N queries (one per book)
 ```
 
-Решение в Django:
-- `select_related` — SQL JOIN для FK и OneToOne (один запрос)
-- `prefetch_related` — отдельный запрос + Python-объединение для M2M и обратных FK
+Solution in Django:
+- `select_related` — SQL JOIN for FK and OneToOne (one query)
+- `prefetch_related` — separate query + Python join for M2M and reverse FK
 
 ```python
-# Правильно:
+# Correct:
 books = Book.objects.select_related('author').all()
 ```
 
 ### annotate vs aggregate
 
 ```python
-# aggregate — одно значение на весь queryset
+# aggregate — single value for the whole queryset
 Order.objects.aggregate(total=Sum('amount'))
 # → {'total': 9500}
 
-# annotate — значение на каждую строку
+# annotate — value per row
 Order.objects.values('user_id').annotate(total=Sum('amount'))
 # → [{'user_id': 1, 'total': 500}, {'user_id': 2, 'total': 300}, ...]
 ```
@@ -61,67 +61,67 @@ Order.objects.values('user_id').annotate(total=Sum('amount'))
 ### SQL Window Functions
 
 ```sql
--- RANK() — ранг с пропусками при совпадении
+-- RANK() — rank with gaps on tie
 SELECT name, salary,
        RANK() OVER (PARTITION BY dept ORDER BY salary DESC) as rank
 FROM employees;
 
--- Running SUM — нарастающий итог
+-- Running SUM — cumulative total
 SELECT date, amount,
        SUM(amount) OVER (ORDER BY date) as running_total
 FROM orders;
 ```
 
-### Составной и частичный индексы
+### Composite and Partial Indexes
 
-#### Составной индекс
+#### Composite index
 
-Поддерживается всеми major БД (PostgreSQL, MySQL/InnoDB, SQLite, Oracle, MSSQL). Правило prefix-запросов работает везде одинаково.
+Supported by all major databases (PostgreSQL, MySQL/InnoDB, SQLite, Oracle, MSSQL). The prefix rule works the same everywhere.
 
 ```sql
 CREATE INDEX idx_user_created ON orders(user_id, created_at);
 -- ✓ WHERE user_id = 1
 -- ✓ WHERE user_id = 1 AND created_at > '2024-01-01'
--- ✗ WHERE created_at > '2024-01-01'  (нет prefix — индекс не используется)
+-- ✗ WHERE created_at > '2024-01-01'  (no prefix — index not used)
 ```
 
-Порядок столбцов критичен: индекс используется только если запрос фильтрует по **префиксу** индексированных столбцов.
+Column order is the key: the index is only usable when the query filters on a **prefix** of the indexed columns.
 
-#### Частичный индекс
+#### Partial index
 
-Индексирует только подмножество строк, соответствующих условию `WHERE` — меньше размер, быстрее запись, выше избирательность.
+Indexes only a subset of rows matching a `WHERE` condition — smaller size, faster writes, higher selectivity.
 
-**Поддержка по базам:**
+**Database support:**
 
-| База данных | Поддержка |
+| Database | Support |
 |---|---|
-| PostgreSQL | ✅ Полная |
-| SQLite | ✅ Полная |
-| MSSQL | ✅ Называется "filtered index" |
-| Oracle | ⚠️ Только через function-based indexes |
-| MySQL / MariaDB | ❌ Не поддерживается |
+| PostgreSQL | ✅ Full support |
+| SQLite | ✅ Full support |
+| MSSQL | ✅ Called "filtered index" |
+| Oracle | ⚠️ Via function-based indexes only |
+| MySQL / MariaDB | ❌ Not supported |
 
 **PostgreSQL / SQLite / MSSQL:**
 
 ```sql
--- Индексирует только pending-заказы — намного меньше полного индекса по status
+-- Only indexes pending orders — much smaller than a full index on status
 CREATE INDEX idx_pending_orders ON orders(created_at)
 WHERE status = 'pending';
 ```
 
-**Обходной путь для MySQL — generated column + обычный индекс:**
+**MySQL workaround — generated column + regular index:**
 
 ```sql
--- Шаг 1: добавить генерируемый столбец, NULL когда не интересно
+-- Step 1: add a generated column that is NULL when not interesting
 ALTER TABLE orders
   ADD COLUMN is_pending TINYINT(1) GENERATED ALWAYS AS (
     IF(status = 'pending', 1, NULL)
   ) STORED;
 
--- Шаг 2: проиндексировать только не-NULL значения (NULL никогда не индексируется в MySQL)
+-- Step 2: index only the non-NULL values (NULL is never indexed in MySQL)
 CREATE INDEX idx_pending_orders ON orders(is_pending, created_at);
 
--- Запрос использует индекс:
+-- Query uses the index:
 SELECT * FROM orders WHERE is_pending = 1 AND created_at > '2024-01-01';
 ```
 
@@ -131,33 +131,33 @@ SELECT * FROM orders WHERE is_pending = 1 AND created_at > '2024-01-01';
 EXPLAIN ANALYZE SELECT * FROM orders WHERE user_id = 42;
 ```
 
-Искать:
-- `Seq Scan` на большой таблице → нет индекса
-- Завышенные `rows` в оценке → устаревшая статистика → запустить `ANALYZE`
-- `Nested Loop` с большим числом итераций → возможно нужен другой тип JOIN
+Look for:
+- `Seq Scan` on a large table → missing index
+- Overestimated `rows` → stale stats → run `ANALYZE`
+- `Nested Loop` with large iteration count → may need a different JOIN type
 
-### CAP-теорема
+### CAP Theorem
 
-Нельзя одновременно:
-- C — Consistency: все узлы видят одни данные
-- A — Availability: каждый запрос получает ответ
-- P — Partition Tolerance: система работает при разрыве сети
+You cannot have all three simultaneously:
+- C — Consistency: all nodes see the same data
+- A — Availability: every request gets a response
+- P — Partition Tolerance: system works despite network splits
 
-P почти всегда обязательна → выбирают CP или AP.
+P is almost always required → choose CP or AP.
 CP: HBase, Zookeeper. AP: Cassandra, CouchDB.
 
 ### UNION vs UNION ALL
 
-`UNION` — удаляет дубликаты (дороже: нужна сортировка/хеширование).
-`UNION ALL` — быстрее; дубликаты остаются.
+`UNION` — removes duplicates (more expensive: requires sort/hash).
+`UNION ALL` — faster; duplicates are kept.
 
-### Масштабирование реляционной БД
+### Scaling a Relational DB
 
-- Вертикальное: более мощный сервер
-- Горизонтальное: read replicas, шардирование
+- Vertical: more powerful server
+- Horizontal: read replicas, sharding
 - Connection pooling: PgBouncer
-- Кэширование: Redis (cache-aside)
-- Денормализация для read-heavy нагрузок
-- Оптимизация запросов: индексы, `EXPLAIN ANALYZE`, covering indexes, избегать `SELECT *`
+- Caching: Redis (cache-aside)
+- Denormalisation for read-heavy workloads
+- Query optimisation: indexes, `EXPLAIN ANALYZE`, covering indexes, avoid `SELECT *`
 
 ---

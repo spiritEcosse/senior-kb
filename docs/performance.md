@@ -1,120 +1,134 @@
-## 13. Производительность Python vs C++
+## 13. Python vs C++ Performance
 
-### Почему Python медленнее
+### Why Python is slower
 
-| Фактор | Python | C++ |
+| Factor | Python | C++ |
 |---|---|---|
-| Выполнение | Байткод интерпретируется CPython | Компилируется в машинный код |
-| Типы | Проверяются в runtime (динамические) | Проверяются на этапе компиляции |
-| Память | Каждое значение — объект кучи с refcount | Стек/куча, value types, нет GC overhead |
-| Потоки | GIL ограничивает параллелизм | Настоящий многоядерный параллелизм |
-| Диспетчеризация | Virtual dispatch при каждом обращении к атрибуту | Инлайнинг, девиртуализация компилятором |
+| Execution | Bytecode interpreted by CPython | Compiled to native machine code |
+| Types | Checked at runtime (dynamic) | Checked at compile time (static) |
+| Memory | Every value is a heap object with refcount | Stack/heap, value types, no GC overhead |
+| Threads | GIL limits parallelism | True multi-core parallelism |
+| Dispatch | Virtual dispatch on every attribute access | Inlined, devirtualised by compiler |
 
 ---
 
-### Сначала профилируй — никогда не угадывай
+### Profiling first — never guess
 
 ```python
-# cProfile — встроенный, статистика на уровне вызовов
+# cProfile — built-in, call-level stats
 python -m cProfile -s cumulative my_script.py
 
 import cProfile
 cProfile.run('my_function()', sort='cumulative')
 
-# line_profiler — построчно (pip install line-profiler)
+# line_profiler — line-by-line (install: pip install line-profiler)
 @profile
 def slow_function():
     ...
 kernprof -l -v my_script.py
 
-# memory_profiler — потребление памяти построчно
+# memory_profiler — memory usage per line
 @profile
 def memory_heavy():
     ...
 python -m memory_profiler my_script.py
 
-# py-spy — sampling profiler, без изменений кода, безопасен в production
+# py-spy — sampling profiler, zero code changes, safe in production
 py-spy record -o profile.svg --pid 12345
-py-spy top --pid 12345          # живой top-like вид
+py-spy top --pid 12345          # live top-like view
 ```
 
 ---
 
-### Типичные оптимизации
+### Common optimisations
 
-**1. Векторизация через NumPy — избегай Python-циклов по числовым данным:**
+**1. Vectorise with NumPy — avoid Python loops on numerical data:**
 
 ```python
 import numpy as np
 
-# Медленно: Python-цикл
-result = [x ** 2 for x in data]       # ~1.2s для 10M элементов
+# Slow: Python loop
+result = [x ** 2 for x in data]       # ~1.2s for 10M elements
 
-# Быстро: NumPy векторизация
+# Fast: NumPy vectorised
 result = np.array(data) ** 2          # ~0.01s
 ```
 
-**2. Встроенные функции и stdlib — реализованы на C:**
+**2. Use built-ins and standard library — implemented in C:**
 
 ```python
-# Медленно
+# Slow
 total = 0
 for x in data:
     total += x
 
-# Быстро
-total = sum(data)          # C-цикл внутри
+# Fast
+total = sum(data)          # C loop internally
 ```
 
-**3. Избегай повторных поисков атрибутов в горячих циклах:**
+**3. Avoid repeated attribute lookups in tight loops:**
 
 ```python
-# Медленно — ищет math.sqrt при каждой итерации
+# Slow — looks up `math.sqrt` on every iteration
 import math
 for x in data:
     math.sqrt(x)
 
-# Быстро — локальная ссылка
+# Fast — local reference
 from math import sqrt
 for x in data:
     sqrt(x)
 ```
 
-**4. Генераторы для больших последовательностей:**
+**4. Use generators for large sequences:**
 
 ```python
-# Строит весь список в памяти
+# Builds entire list in memory
 total = sum([x ** 2 for x in range(10_000_000)])
 
-# Генератор — по одному элементу
+# Generator — one element at a time
 total = sum(x ** 2 for x in range(10_000_000))
 ```
 
-**5. Конкатенация строк:**
+**5. String concatenation:**
 
 ```python
-# Медленно: новый строковый объект на каждой итерации
+# Slow: creates a new string object each iteration
 result = ""
 for s in parts:
     result += s
 
-# Быстро: одно выделение памяти
+# Fast: single allocation
 result = "".join(parts)
 ```
 
 ---
 
-### Инструменты ускорения
+### Speed-up tools
 
-| Инструмент | Подход | Ускорение |
+| Tool | Approach | Speedup |
 |---|---|---|
-| NumPy | C-массивы + BLAS | 10–100× для числовых |
-| Cython | Компиляция Python в C | 10–100× |
-| Numba | JIT-компиляция через LLVM | 10–200× для числовых |
-| PyPy | Tracing JIT интерпретатор | 3–10× для общего Python |
-| multiprocessing | Обход GIL через процессы | N× (N = кол-во ядер) |
-| asyncio | Конкурентный I/O, один поток | Высокая конкурентность |
-| C-расширение (cffi, ctypes) | Вызов C/Rust библиотек | Близко к native |
-| pyo3 | Python-расширения на Rust | Близко к native |
+| NumPy | C arrays + BLAS | 10–100× for numerical |
+| Cython | Compile Python to C | 10–100× |
+| Numba | JIT compile with LLVM | 10–200× for numerical |
+| PyPy | Tracing JIT interpreter | 3–10× general Python |
+| multiprocessing | Bypass GIL with processes | N× (N = cores) |
+| asyncio | Concurrent I/O, single thread | High concurrency, not raw speed |
+| C extension (cffi, ctypes) | Call C/Rust libraries | Near-native |
+| pyo3 | Write Python extensions in Rust | Near-native |
+
+---
+
+### When Python speed is good enough
+
+CPython is fast enough for:
+- I/O-bound work (network, disk) — speed is the network, not Python
+- Orchestration code — gluing fast libraries together
+- Prototyping — correctness first, optimise later
+
+Python is genuinely slow for:
+- Tight numerical loops without NumPy
+- CPU-bound parallelism (GIL)
+- Real-time / latency-sensitive systems (use Rust/C++ there)
 
 ---

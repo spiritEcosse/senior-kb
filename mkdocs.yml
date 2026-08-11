@@ -29,9 +29,7 @@ theme:
 
 plugins:
   - search:
-      lang:
-        - en
-        - ru
+      lang: en
 
 markdown_extensions:
   - admonition
@@ -45,42 +43,21 @@ markdown_extensions:
       permalink: true
 
 nav:
-  - Home: en/index.md
-  - "🇬🇧 English":
-    - Python Core: en/python-core.md
-    - OOP: en/oop.md
-    - Concurrency & Async: en/concurrency.md
-    - Threading vs asyncio vs Multiprocessing: en/threading.md
-    - Databases: en/databases.md
-    - Web & API: en/web-api.md
-    - API Design: en/web-api.md
-    - Caching: en/caching.md
-    - Queues & Tasks: en/queues.md
-    - Architecture: en/architecture.md
-    - Django Internals: en/django.md
-    - Testing: en/testing.md
-    - Security: en/security.md
-    - System Programming: en/system.md
-    - DevOps: en/devops.md
-    - Git: en/git.md
-    - Performance: en/performance.md
-    - ML & Data (NumPy, Pandas): en/ml-data.md
-  - "🇷🇺 Русский":
-    - Обзор: index.md
-    - Python Core: python-core.md
-    - ООП: oop.md
-    - Параллелизм и async: concurrency.md
-    - Threading vs asyncio vs Multiprocessing: threading.md
-    - Базы данных: databases.md
-    - Web и API: web-api.md
-    - Кэширование: caching.md
-    - Очереди и задачи: queues.md
-    - Архитектура: architecture.md
-    - Django: django.md
-    - Тестирование: testing.md
-    - Безопасность: security.md
-    - Системное программирование: system.md
-    - DevOps: devops.md
-    - Git: git.md
-    - Производительность: performance.md
-    - ML и данные (NumPy, Pandas): ml-data.md
+  - Home: index.md
+  - Python Core: python-core.md
+  - OOP: oop.md
+  - Concurrency & Async: concurrency.md
+  - Threading vs asyncio vs Multiprocessing: threading.md
+  - Databases: databases.md
+  - Web & API: web-api.md
+  - Caching: caching.md
+  - Queues & Tasks: queues.md
+  - Architecture: architecture.md
+  - Django Internals: django.md
+  - Testing: testing.md
+  - Security: security.md
+  - System Programming: system.md
+  - DevOps: devops.md
+  - Git: git.md
+  - Performance: performance.md
+  - ML & Data (NumPy, Pandas): ml-data.md
