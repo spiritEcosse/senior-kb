@@ -72,19 +72,57 @@ SELECT date, amount,
 FROM orders;
 ```
 
-### PostgreSQL Indexes: Composite and Partial
+### Composite and Partial Indexes
+
+#### Composite index
+
+Supported by all major databases (PostgreSQL, MySQL/InnoDB, SQLite, Oracle, MSSQL). The prefix rule works the same everywhere.
 
 ```sql
--- Composite: column order matters for prefix queries
 CREATE INDEX idx_user_created ON orders(user_id, created_at);
 -- ✓ WHERE user_id = 1
 -- ✓ WHERE user_id = 1 AND created_at > '2024-01-01'
--- ✗ WHERE created_at > '2024-01-01'  (without user_id — won't use index)
+-- ✗ WHERE created_at > '2024-01-01'  (no prefix — index not used)
+```
 
--- Partial: indexes only a subset of rows
+Column order is the key: the index is only usable when the query filters on a **prefix** of the indexed columns.
+
+#### Partial index
+
+Indexes only a subset of rows matching a `WHERE` condition — smaller size, faster writes, higher selectivity.
+
+**Database support:**
+
+| Database | Support |
+|---|---|
+| PostgreSQL | ✅ Full support |
+| SQLite | ✅ Full support |
+| MSSQL | ✅ Called "filtered index" |
+| Oracle | ⚠️ Via function-based indexes only |
+| MySQL / MariaDB | ❌ Not supported |
+
+**PostgreSQL / SQLite / MSSQL:**
+
+```sql
+-- Only indexes pending orders — much smaller than a full index on status
 CREATE INDEX idx_pending_orders ON orders(created_at)
 WHERE status = 'pending';
--- Smaller size, faster updates, useful when high selectivity
+```
+
+**MySQL workaround — generated column + regular index:**
+
+```sql
+-- Step 1: add a generated column that is NULL when not interesting
+ALTER TABLE orders
+  ADD COLUMN is_pending TINYINT(1) GENERATED ALWAYS AS (
+    IF(status = 'pending', 1, NULL)
+  ) STORED;
+
+-- Step 2: index only the non-NULL values (NULL is never indexed in MySQL)
+CREATE INDEX idx_pending_orders ON orders(is_pending, created_at);
+
+-- Query uses the index:
+SELECT * FROM orders WHERE is_pending = 1 AND created_at > '2024-01-01';
 ```
 
 ### EXPLAIN ANALYZE
