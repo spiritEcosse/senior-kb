@@ -22,3 +22,11 @@ asyncio.wait_for(coro, timeout) — добавить таймаут.
 asyncio.Lock(), asyncio.Semaphore() — примитивы синхронизации для async-кода.
 
 ---
+
+### Профилировщики
+
+- `Intel VTune`, `Valgrind` — для C-расширений и многопоточного кода
+- `memory_profiler` — профилирование потребления памяти в Python
+- `cProfile`, `py-spy`, `line_profiler` — для чистого Python-кода
+
+---
