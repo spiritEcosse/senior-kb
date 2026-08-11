@@ -62,6 +62,7 @@ nav:
     - DevOps: en/devops.md
     - Git: en/git.md
     - Performance: en/performance.md
+    - ML & Data (NumPy, Pandas): en/ml-data.md
   - "🇷🇺 Русский":
     - Обзор: index.md
     - Python Core: python-core.md
@@ -79,3 +80,4 @@ nav:
     - DevOps: devops.md
     - Git: git.md
     - Производительность: performance.md
+    - ML и данные (NumPy, Pandas): ml-data.md
