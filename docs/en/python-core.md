@@ -229,20 +229,151 @@ render(Square())  # ✓
 
 ### Type Annotations (typing)
 
-`int`, `str`, `list[int]`, `dict[str, Any]`, `Optional[str]` = `str | None`
-`TypeVar`, `Generic[T]` — generic types
-`Callable[[int, str], bool]`
-`Protocol` — defines a structural interface
+```python
+int, str, list[int], dict[str, Any]
+Optional[str]           # = str | None
+Callable[[int, str], bool]
+Protocol                # structural interface (duck typing + static check)
+```
+
+#### TypeVar and Generic
+
+`TypeVar` declares a placeholder type that gets resolved at call time. `Generic[T]` makes a class parametric over that placeholder.
+
+```python
+from typing import TypeVar, Generic
+
+T = TypeVar('T')
+
+# Generic function — T is inferred from the argument
+def first(items: list[T]) -> T:
+    return items[0]
+
+first([1, 2, 3])      # T = int   → returns int
+first(['a', 'b'])     # T = str   → returns str
+
+# Generic class — T is set when the class is instantiated
+class Box(Generic[T]):
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+    def unwrap(self) -> T:
+        return self.value
+
+box: Box[int] = Box(42)
+print(box.unwrap())   # 42
+```
+
+**Bounded TypeVar** — restrict T to a specific type or its subclasses:
+
+```python
+from typing import TypeVar
+from numbers import Number
+
+N = TypeVar('N', bound=Number)   # T must be Number or a subclass
+
+def add(a: N, b: N) -> N:
+    return a + b   # type: ignore
+
+add(1, 2)       # ✓ int is a Number
+add(1.0, 2.0)   # ✓ float is a Number
+# add("a", "b") # ✗ mypy error: str is not a Number
+```
+
+**Python 3.12+ new syntax** — identical semantics, no import needed:
+
+```python
+# Old way
+T = TypeVar('T')
+class Box(Generic[T]): ...
+
+# New way (Python 3.12+) — same semantics, cleaner syntax
+class Box[T]: ...
+class Pair[K, V]: ...
+class Repository[S: Serializable]: ...  # bound
+```
+
 Checkers: `mypy`, `pyright`
 
 ---
 
 ### functools
 
-`@lru_cache(maxsize=128)` — memoisation with LRU eviction; pure functions only
-`@cache` — unbounded cache (Python 3.9+)
-`partial(func, *args)` — fix some arguments, return a new callable
-`reduce(func, iterable)` — left fold
+#### @lru_cache and @cache
+
+```python
+from functools import lru_cache, cache
+
+# lru_cache — bounded: evicts least-recently-used when maxsize is reached
+@lru_cache(maxsize=128)
+def fibonacci(n: int) -> int:
+    if n < 2:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+print(fibonacci(50))          # fast — results are cached
+print(fibonacci.cache_info()) # CacheInfo(hits=48, misses=51, maxsize=128, currsize=51)
+fibonacci.cache_clear()       # reset the cache
+
+# cache — unbounded (Python 3.9+), equivalent to lru_cache(maxsize=None)
+@cache
+def factorial(n: int) -> int:
+    return 1 if n == 0 else n * factorial(n - 1)
+```
+
+!!! warning
+    Only use on **pure functions** — same arguments must always produce the same result. Never cache functions with side effects or that depend on mutable state.
+
+#### partial
+
+Fixes some arguments of a function, returning a new callable with fewer parameters:
+
+```python
+from functools import partial
+
+def power(base, exponent):
+    return base ** exponent
+
+square = partial(power, exponent=2)
+cube   = partial(power, exponent=3)
+
+print(square(5))   # 25
+print(cube(3))     # 27
+
+# Useful for callbacks and higher-order functions
+numbers = [1, 2, 3, 4, 5]
+multiply_by_10 = partial(map, partial(power, exponent=1))  # trivial example
+print(list(map(square, numbers)))  # [1, 4, 9, 16, 25]
+```
+
+#### reduce
+
+Left fold — applies a binary function cumulatively to reduce a sequence to a single value:
+
+```python
+from functools import reduce
+
+# Sum without built-in sum()
+result = reduce(lambda acc, x: acc + x, [1, 2, 3, 4, 5])
+print(result)   # 15  →  ((((1+2)+3)+4)+5)
+
+# Product
+product = reduce(lambda acc, x: acc * x, [1, 2, 3, 4, 5])
+print(product)  # 120
+
+# Flatten nested list
+nested = [[1, 2], [3, 4], [5, 6]]
+flat = reduce(lambda acc, x: acc + x, nested)
+print(flat)     # [1, 2, 3, 4, 5, 6]
+
+# With initial value (avoids error on empty sequence)
+reduce(lambda acc, x: acc + x, [], 0)   # 0 (not an error)
+```
+
+**When to prefer alternatives:**
+- `sum()` over `reduce(lambda a, b: a + b, ...)`
+- `itertools.chain.from_iterable()` over `reduce` for flattening
+- Use `reduce` when there's no built-in for the specific accumulation logic
 
 ---
 

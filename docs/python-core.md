@@ -236,25 +236,190 @@ render(Square())  # ✓
 
 ```python
 int, str, list[int], dict[str, Any]
-Optional[str]  # = str | None
-TypeVar, Generic[T]  # обобщённые типы
+Optional[str]           # = str | None
 Callable[[int, str], bool]
-Protocol  # структурный интерфейс (duck typing + static check)
+Protocol                # структурный интерфейс (duck typing + static check)
+```
+
+#### TypeVar и Generic
+
+`TypeVar` объявляет placeholder-тип, который конкретизируется при вызове. `Generic[T]` делает класс параметрическим по этому placeholder-у.
+
+```python
+from typing import TypeVar, Generic
+
+T = TypeVar('T')
+
+# Обобщённая функция — T выводится из аргумента
+def first(items: list[T]) -> T:
+    return items[0]
+
+first([1, 2, 3])      # T = int   → возвращает int
+first(['a', 'b'])     # T = str   → возвращает str
+
+# Обобщённый класс — T задаётся при создании экземпляра
+class Box(Generic[T]):
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+    def unwrap(self) -> T:
+        return self.value
+
+box: Box[int] = Box(42)
+print(box.unwrap())   # 42
+```
+
+**Ограниченный TypeVar** — ограничить T конкретным типом или его подклассами:
+
+```python
+from typing import TypeVar
+from numbers import Number
+
+N = TypeVar('N', bound=Number)   # T должен быть Number или подклассом
+
+def add(a: N, b: N) -> N:
+    return a + b
+
+add(1, 2)       # ✓ int — это Number
+add(1.0, 2.0)   # ✓ float — это Number
+# add("a", "b") # ✗ ошибка mypy: str не является Number
+```
+
+**Новый синтаксис Python 3.12+** — та же семантика, без импорта:
+
+```python
+# Старый способ
+T = TypeVar('T')
+class Box(Generic[T]): ...
+
+# Новый способ (Python 3.12+) — идентичная семантика, чище
+class Box[T]: ...
+class Pair[K, V]: ...
+class Repository[S: Serializable]: ...  # bound
 ```
 
 Проверка: `mypy`, `pyright`
 
 ---
 
-### functools
+### Аннотации и dataclass: как это работает внутри
+
+В Python аннотации — это подсказки типов, которые пишутся через `:` после имени переменной:
 
 ```python
-@lru_cache(maxsize=128)  # мемоизация с LRU-вытеснением; только для чистых функций
-@cache                   # неограниченный кэш (Python 3.9+)
+from dataclasses import dataclass
 
-partial(func, *args)     # зафиксировать часть аргументов, вернуть новый callable
-reduce(func, iterable)   # левая свёртка
+@dataclass
+class Point:
+    x: float      # ← аннотация
+    y: float      # ← аннотация
+    label: str = "origin"  # ← аннотация + значение по умолчанию
 ```
+
+`dataclass` читает `__annotations__` класса — обычный словарь, который Python автоматически заполняет при разборе класса:
+
+```python
+>>> Point.__annotations__
+{'x': <class 'float'>, 'y': <class 'float'>, 'label': <class 'str'>}
+```
+
+На основе этого словаря декоратор генерирует методы автоматически:
+
+```python
+# Что dataclass создаёт под капотом:
+
+def __init__(self, x: float, y: float, label: str = "origin"):
+    self.x = x
+    self.y = y
+    self.label = label
+
+def __repr__(self):
+    return f"Point(x={self.x!r}, y={self.y!r}, label={self.label!r})"
+
+def __eq__(self, other):
+    return (self.x, self.y, self.label) == (other.x, other.y, other.label)
+```
+
+То есть «из аннотаций» означает: декоратор смотрит на `x: float`, `y: float` — вот поля, вот их типы — и по ним строит код методов. Без аннотаций `dataclass` просто не увидит поля.
+
+---
+
+### functools
+
+#### @lru_cache и @cache
+
+```python
+from functools import lru_cache, cache
+
+# lru_cache — ограниченный: вытесняет наименее используемые при достижении maxsize
+@lru_cache(maxsize=128)
+def fibonacci(n: int) -> int:
+    if n < 2:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+print(fibonacci(50))          # быстро — результаты кэшированы
+print(fibonacci.cache_info()) # CacheInfo(hits=48, misses=51, maxsize=128, currsize=51)
+fibonacci.cache_clear()       # сбросить кэш
+
+# cache — неограниченный (Python 3.9+), аналог lru_cache(maxsize=None)
+@cache
+def factorial(n: int) -> int:
+    return 1 if n == 0 else n * factorial(n - 1)
+```
+
+!!! warning
+    Использовать только для **чистых функций** — одинаковые аргументы всегда должны давать одинаковый результат. Никогда не кэшировать функции с side-эффектами или зависящие от изменяемого состояния.
+
+#### partial
+
+Фиксирует часть аргументов функции, возвращая новый callable с меньшим числом параметров:
+
+```python
+from functools import partial
+
+def power(base, exponent):
+    return base ** exponent
+
+square = partial(power, exponent=2)
+cube   = partial(power, exponent=3)
+
+print(square(5))   # 25
+print(cube(3))     # 27
+
+# Удобно для колбэков и функций высшего порядка
+numbers = [1, 2, 3, 4, 5]
+print(list(map(square, numbers)))  # [1, 4, 9, 16, 25]
+```
+
+#### reduce
+
+Левая свёртка — применяет бинарную функцию накопительно, сворачивая последовательность в одно значение:
+
+```python
+from functools import reduce
+
+# Сумма без встроенного sum()
+result = reduce(lambda acc, x: acc + x, [1, 2, 3, 4, 5])
+print(result)   # 15  →  ((((1+2)+3)+4)+5)
+
+# Произведение
+product = reduce(lambda acc, x: acc * x, [1, 2, 3, 4, 5])
+print(product)  # 120
+
+# Разворачивание вложенного списка
+nested = [[1, 2], [3, 4], [5, 6]]
+flat = reduce(lambda acc, x: acc + x, nested)
+print(flat)     # [1, 2, 3, 4, 5, 6]
+
+# С начальным значением (защита от ошибки на пустой последовательности)
+reduce(lambda acc, x: acc + x, [], 0)   # 0 (не ошибка)
+```
+
+**Когда лучше использовать альтернативы:**
+- `sum()` вместо `reduce(lambda a, b: a + b, ...)`
+- `itertools.chain.from_iterable()` вместо `reduce` для разворачивания
+- `reduce` — когда нет встроенного для конкретной логики накопления
 
 ---
 
