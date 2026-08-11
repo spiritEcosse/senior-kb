@@ -215,3 +215,42 @@ namedtuple — лёгкий иммутабельный record с именова�
 - Big O: O(1) → O(log n) → O(n) → O(n log n) → O(n²) → O(2ⁿ)
 
 ---
+
+### type() и Метаклассы
+
+**Краткий ответ:**
+`type` — метакласс для создания классов. Все классы в Python — объекты, созданные через `type`.
+`type(name, bases, attrs)` — создаёт новый класс динамически.
+
+**Метаклассы:**
+Метакласс контролирует создание классов. Определяет `__new__(cls, name, bases, attrs)`.
+
+```python
+class MyMeta(type):
+    def __new__(cls, name, bases, attrs):
+        attrs['custom_attr'] = 42
+        return super().__new__(cls, name, bases, attrs)
+
+class MyClass(metaclass=MyMeta):
+    pass
+
+print(MyClass.custom_attr)  # 42
+```
+
+Применение: ORM (Django Models), API-фреймворки, валидация классов.
+
+---
+
+### Динамический импорт модуля
+
+```python
+import importlib.util
+
+def import_module_from_path(path):
+    spec = importlib.util.spec_from_file_location("module", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+```
+
+---
