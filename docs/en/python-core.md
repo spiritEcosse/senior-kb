@@ -3,8 +3,7 @@
 ### GIL (Global Interpreter Lock)
 
 **Short answer:**
-The GIL prevents other threads from executing bytecode while the current thread is running.
-After the interval expires (default 5 ms, `sys.getswitchinterval()`), a "want GIL" flag is checked — if another thread is waiting, the current thread releases the lock and sleeps.
+A thread holds the GIL and executes bytecode. After the interval (`sys.getswitchinterval()`, default 5 ms), the interpreter checks whether other threads are waiting for the GIL — if so, the current thread is forced to release it. So switching is timer-based, but a thread can also release the GIL earlier on its own, for example during a blocking I/O operation.
 
 !!! warning
     "Tick" is outdated Python 2 terminology (`sys.getcheckinterval` = 100 instructions). In Python 3.2+ switching is timer-based.
