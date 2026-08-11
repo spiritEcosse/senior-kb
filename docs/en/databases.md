@@ -41,6 +41,63 @@ Solution in Django:
 - `select_related` — SQL JOIN for FK and OneToOne (one query)
 - `prefetch_related` — separate query + Python join for M2M and reverse FK
 
+```python
+# Correct:
+books = Book.objects.select_related('author').all()
+```
+
+### annotate vs aggregate
+
+```python
+# aggregate — single value for the whole queryset
+Order.objects.aggregate(total=Sum('amount'))
+# → {'total': 9500}
+
+# annotate — value per row
+Order.objects.values('user_id').annotate(total=Sum('amount'))
+# → [{'user_id': 1, 'total': 500}, {'user_id': 2, 'total': 300}, ...]
+```
+
+### SQL Window Functions
+
+```sql
+-- RANK() — rank with gaps on tie
+SELECT name, salary,
+       RANK() OVER (PARTITION BY dept ORDER BY salary DESC) as rank
+FROM employees;
+
+-- Running SUM — cumulative total
+SELECT date, amount,
+       SUM(amount) OVER (ORDER BY date) as running_total
+FROM orders;
+```
+
+### PostgreSQL Indexes: Composite and Partial
+
+```sql
+-- Composite: column order matters for prefix queries
+CREATE INDEX idx_user_created ON orders(user_id, created_at);
+-- ✓ WHERE user_id = 1
+-- ✓ WHERE user_id = 1 AND created_at > '2024-01-01'
+-- ✗ WHERE created_at > '2024-01-01'  (without user_id — won't use index)
+
+-- Partial: indexes only a subset of rows
+CREATE INDEX idx_pending_orders ON orders(created_at)
+WHERE status = 'pending';
+-- Smaller size, faster updates, useful when high selectivity
+```
+
+### EXPLAIN ANALYZE
+
+```sql
+EXPLAIN ANALYZE SELECT * FROM orders WHERE user_id = 42;
+```
+
+Look for:
+- `Seq Scan` on a large table → missing index
+- Overestimated `rows` → stale stats → run `ANALYZE`
+- `Nested Loop` with large iteration count → may need a different JOIN type
+
 ### CAP Theorem
 
 You cannot have all three simultaneously:
@@ -64,10 +121,5 @@ CP: HBase, Zookeeper. AP: Cassandra, CouchDB.
 - Caching: Redis (cache-aside)
 - Denormalisation for read-heavy workloads
 - Query optimisation: indexes, `EXPLAIN ANALYZE`, covering indexes, avoid `SELECT *`
-
-### Query Profiling
-
-`EXPLAIN ANALYZE` in PostgreSQL — execution plan, actual timing, actual row counts.
-Look for: Seq Scan on large tables (missing index), overestimated row counts (stale stats → run `ANALYZE`).
 
 ---
