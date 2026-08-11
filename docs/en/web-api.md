@@ -49,6 +49,35 @@ Typically: OAuth 2.0 + OpenID Connect.
 WSGI: synchronous; `callable(environ, start_response)`. Servers: Gunicorn, uWSGI.
 ASGI: asynchronous; supports WebSocket, long-polling. Servers: Uvicorn, Daphne.
 
+### API Security: IDOR
+
+```python
+# Vulnerable: user can supply another user's order_id
+@api_view(['GET'])
+def get_order(request, order_id):
+    order = Order.objects.get(pk=order_id)  # IDOR!
+    return Response(OrderSerializer(order).data)
+
+# Correct: filter by current user
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_order(request, order_id):
+    order = get_object_or_404(Order, pk=order_id, user=request.user)
+    return Response(OrderSerializer(order).data)
+```
+
+### .exists() vs bool(queryset)
+
+```python
+# Slow: loads all objects into memory
+if Order.objects.filter(user=user):
+    ...
+
+# Fast: SELECT 1 LIMIT 1
+if Order.objects.filter(user=user).exists():
+    ...
+```
+
 ### DNS + Full HTTP Request Lifecycle
 
 1. Check local DNS cache
