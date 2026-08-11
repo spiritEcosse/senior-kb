@@ -227,3 +227,42 @@ Checkers: `mypy`, `pyright`
 - Big O: O(1) → O(log n) → O(n) → O(n log n) → O(n²) → O(2ⁿ)
 
 ---
+
+### type() and Metaclasses
+
+**Short answer:**
+`type` is the metaclass for creating classes. All classes in Python are objects created via `type`.
+`type(name, bases, attrs)` — creates a new class dynamically.
+
+**Metaclasses:**
+A metaclass controls class creation. It defines `__new__(cls, name, bases, attrs)`.
+
+```python
+class MyMeta(type):
+    def __new__(cls, name, bases, attrs):
+        attrs['custom_attr'] = 42
+        return super().__new__(cls, name, bases, attrs)
+
+class MyClass(metaclass=MyMeta):
+    pass
+
+print(MyClass.custom_attr)  # 42
+```
+
+Use cases: ORM (Django Models), API frameworks, class validation.
+
+---
+
+### Dynamic Module Import
+
+```python
+import importlib.util
+
+def import_module_from_path(path):
+    spec = importlib.util.spec_from_file_location("module", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+```
+
+---
