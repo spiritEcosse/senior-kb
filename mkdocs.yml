@@ -53,9 +53,11 @@ nav:
     - Threading vs asyncio vs Multiprocessing: en/threading.md
     - Databases: en/databases.md
     - Web & API: en/web-api.md
+    - API Design: en/web-api.md
     - Caching: en/caching.md
     - Queues & Tasks: en/queues.md
     - Architecture: en/architecture.md
+    - Django Internals: en/django.md
     - Testing: en/testing.md
     - Security: en/security.md
     - System Programming: en/system.md
@@ -74,6 +76,7 @@ nav:
     - Кэширование: caching.md
     - Очереди и задачи: queues.md
     - Архитектура: architecture.md
+    - Django: django.md
     - Тестирование: testing.md
     - Безопасность: security.md
     - Системное программирование: system.md

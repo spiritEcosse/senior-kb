@@ -433,3 +433,131 @@ def import_module_from_path(path):
 ```
 
 ---
+
+### Exception chaining and custom hierarchies
+
+```python
+# raise X from Y — explicit chaining (preserves original traceback)
+try:
+    result = db.query(sql)
+except DatabaseError as e:
+    raise ServiceUnavailableError("DB unreachable") from e
+# → ServiceUnavailableError: DB unreachable
+#   The above exception was the direct cause of the following exception:
+#   DatabaseError: connection refused
+
+# raise X from None — suppress original exception context
+try:
+    value = int(user_input)
+except ValueError:
+    raise ValidationError("Expected an integer") from None
+
+# Custom exception hierarchy
+class AppError(Exception):
+    """Base for all application errors."""
+
+class ValidationError(AppError):
+    def __init__(self, field: str, message: str):
+        self.field = field
+        super().__init__(f"{field}: {message}")
+
+class NotFoundError(AppError):
+    pass
+
+class ServiceUnavailableError(AppError):
+    pass
+
+# Catch at the right level
+try:
+    process(data)
+except ValidationError as e:
+    return 422, {"field": e.field, "error": str(e)}
+except NotFoundError:
+    return 404, {"error": "not found"}
+except AppError:
+    return 500, {"error": "internal error"}
+```
+
+---
+
+### contextlib: suppress and ExitStack
+
+```python
+from contextlib import suppress, ExitStack
+
+# suppress — silently ignore specific exceptions
+with suppress(FileNotFoundError):
+    os.remove('tmp.txt')   # no error if file doesn't exist
+
+# ExitStack — dynamic number of context managers
+def process_files(paths: list[str]):
+    with ExitStack() as stack:
+        files = [stack.enter_context(open(p)) for p in paths]
+        # all files closed automatically, even if one fails mid-loop
+        for f in files:
+            process(f.read())
+
+# Useful when you don't know at write-time how many CMs you need
+```
+
+---
+
+### weakref
+
+A weak reference doesn't prevent an object from being garbage collected.
+
+```python
+import weakref
+
+class Cache:
+    def __init__(self):
+        self._data = {}   # strong refs — objects kept alive by cache
+
+class WeakCache:
+    def __init__(self):
+        self._data = weakref.WeakValueDictionary()   # weak refs — GC can collect values
+
+obj = MyObject()
+cache = WeakCache()
+cache._data['key'] = obj
+del obj                    # refcount → 0; GC collects it
+print(cache._data.get('key'))  # None — automatically removed
+
+# Use cases:
+# - Caches that shouldn't prevent GC (avoid memory leaks)
+# - Observer/callback registries (don't keep dead objects alive)
+# - __weakref__ must be in __slots__ if you use __slots__
+```
+
+---
+
+### Python internals: bytecode and import system
+
+```python
+# dis — inspect bytecode
+import dis
+
+def add(a, b):
+    return a + b
+
+dis.dis(add)
+#   2           0 RESUME          0
+#   3           2 LOAD_FAST       0 (a)
+#               4 LOAD_FAST       1 (b)
+#               6 BINARY_OP      0 (+)
+#              10 RETURN_VALUE
+
+# Import system
+import sys
+print(sys.modules.keys())          # all currently imported modules
+print(sys.path)                    # directories Python searches for modules
+
+# __all__ — controls what 'from module import *' exports
+# mymodule.py
+__all__ = ['PublicClass', 'public_function']   # private_helper not exported
+
+# Namespace packages (PEP 420) — directory without __init__.py
+# Allows splitting a package across multiple directories/distributions
+```
+
+---
