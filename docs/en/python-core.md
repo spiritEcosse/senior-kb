@@ -183,10 +183,47 @@ from abc import ABC, abstractmethod
 class Shape(ABC):
     @abstractmethod
     def area(self) -> float: ...
+
+class Circle(Shape):
+    def __init__(self, radius: float):
+        self.radius = radius
+
+    def area(self) -> float:
+        return 3.14159 * self.radius ** 2
+
+# Shape()   → TypeError: can't instantiate abstract class
+c = Circle(5)
+print(c.area())  # 78.53975
 ```
 
-Attempting to instantiate a class with an unimplemented abstract method → `TypeError`.
-`Protocol` (typing) — structural typing (duck typing + type checking without inheritance).
+### Protocol (structural typing)
+
+`Protocol` achieves the same goal without inheritance — a class satisfies a Protocol simply by implementing the required methods (duck typing + static type checking).
+
+```python
+from typing import Protocol
+
+class Drawable(Protocol):
+    def draw(self) -> None: ...
+
+class Circle:
+    def draw(self) -> None:
+        print("Drawing circle")
+
+class Square:
+    def draw(self) -> None:
+        print("Drawing square")
+
+def render(shape: Drawable) -> None:
+    shape.draw()
+
+render(Circle())  # ✓ — no inheritance required
+render(Square())  # ✓
+
+# Key difference from ABC:
+# ABC  — enforced at instantiation time (runtime)
+# Protocol — checked by mypy/pyright at type-check time, no runtime enforcement
+```
 
 ---
 
