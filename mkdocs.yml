@@ -1,23 +1,23 @@
-site_name: Python Senior — База знаний
-site_description: Структурированная база знаний для собеседований Python Senior
+site_name: Python Senior — Knowledge Base
+site_description: Structured knowledge base for Python Senior interviews
 docs_dir: docs
 
 theme:
   name: material
-  language: ru
+  language: en
   palette:
     - scheme: default
       primary: blue
       accent: blue
       toggle:
         icon: material/brightness-7
-        name: Тёмная тема
+        name: Dark theme
     - scheme: slate
       primary: blue
       accent: blue
       toggle:
         icon: material/brightness-4
-        name: Светлая тема
+        name: Light theme
   features:
     - navigation.tabs
     - navigation.sections
@@ -29,7 +29,9 @@ theme:
 
 plugins:
   - search:
-      lang: ru
+      lang:
+        - en
+        - ru
 
 markdown_extensions:
   - admonition
@@ -43,17 +45,34 @@ markdown_extensions:
       permalink: true
 
 nav:
-  - Главная: index.md
-  - Python Core: python-core.md
-  - ООП: oop.md
-  - Параллелизм и асинхронность: concurrency.md
-  - Базы данных: databases.md
-  - Web и API: web-api.md
-  - Кэширование: caching.md
-  - Очереди и фоновые задачи: queues.md
-  - Архитектура: architecture.md
-  - Тестирование: testing.md
-  - Безопасность: security.md
-  - DevOps: devops.md
-  - Git: git.md
-  - Python vs C++: performance.md
+  - Home: index.md
+  - "🇬🇧 English":
+    - Overview: en/index.md
+    - Python Core: en/python-core.md
+    - OOP: en/oop.md
+    - Concurrency & Async: en/concurrency.md
+    - Databases: en/databases.md
+    - Web & API: en/web-api.md
+    - Caching: en/caching.md
+    - Queues & Tasks: en/queues.md
+    - Architecture: en/architecture.md
+    - Testing: en/testing.md
+    - Security: en/security.md
+    - DevOps: en/devops.md
+    - Git: en/git.md
+    - Performance: en/performance.md
+  - "🇷🇺 Русский":
+    - Обзор: index.md
+    - Python Core: python-core.md
+    - ООП: oop.md
+    - Параллелизм и async: concurrency.md
+    - Базы данных: databases.md
+    - Web и API: web-api.md
+    - Кэширование: caching.md
+    - Очереди и задачи: queues.md
+    - Архитектура: architecture.md
+    - Тестирование: testing.md
+    - Безопасность: security.md
+    - DevOps: devops.md
+    - Git: git.md
+    - Производительность: performance.md
