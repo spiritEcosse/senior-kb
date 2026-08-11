@@ -109,7 +109,46 @@ Implement `__enter__` and `__exit__`.
 - `__enter__`: called on `with` entry; returns the managed object
 - `__exit__(exc_type, exc_value, traceback)`: called on exit; return `True` to suppress the exception
 
-Alternative: `@contextlib.contextmanager` with `yield`.
+Alternative: `@contextlib.contextmanager` with `yield` — cleaner for simple cases, no class needed:
+
+```python
+from contextlib import contextmanager
+import time
+
+@contextmanager
+def timer(label: str):
+    start = time.perf_counter()
+    try:
+        yield                          # everything inside 'with' runs here
+    finally:
+        elapsed = time.perf_counter() - start
+        print(f"{label}: {elapsed:.3f}s")
+
+with timer("db query"):
+    results = db.execute("SELECT ...")
+
+# DB connection example — yield the resource, cleanup in finally
+@contextmanager
+def get_connection(url: str):
+    conn = connect(url)
+    try:
+        yield conn                     # 'as conn' in the with statement
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()                   # always runs, even on exception
+
+with get_connection(DATABASE_URL) as conn:
+    conn.execute("INSERT ...")
+    conn.commit()
+
+# How it maps to __enter__ / __exit__:
+# everything before yield  → __enter__
+# yield value              → what 'as' receives
+# finally block            → __exit__ (always)
+# except block             → __exit__ when exc_type is not None
+```
 
 ---
 
