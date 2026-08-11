@@ -6,6 +6,78 @@
 - Image — immutable filesystem snapshot + metadata (layers)
 - Container — running instance of an image; isolated via Linux namespaces + cgroups
 
+---
+
+### Container vs Host system
+
+A container is **not a VM** — it shares the host OS kernel. Isolation comes from two Linux kernel features:
+
+**Namespaces** — what the container *can see*:
+
+| Namespace | Isolates |
+|---|---|
+| `pid` | Process tree — container sees only its own processes; PID 1 inside = your app |
+| `net` | Network interfaces, routing tables, ports — container gets its own `eth0` |
+| `mnt` | Filesystem mount points — container has its own `/` |
+| `uts` | Hostname and domain name |
+| `ipc` | Shared memory, semaphores |
+| `user` | UID/GID mapping — root inside container ≠ root on host (with user namespaces) |
+
+**cgroups** — what the container *can use*:
+
+```
+cpu    → limit CPU share or number of cores
+memory → limit RAM; OOM-killer fires if exceeded
+blkio  → limit disk I/O bandwidth
+pids   → limit number of processes (prevent fork bombs)
+```
+
+**Practical differences:**
+
+```
+                    Host            Container
+─────────────────────────────────────────────
+Kernel              shared          shared (same kernel!)
+Filesystem          /               isolated (own rootfs from image)
+Process namespace   all PIDs        only container's PIDs
+Network             eth0, lo        veth pair → bridge → host NAT
+Users               real UIDs       mapped UIDs (root in container ≠ root on host by default)
+Resources           unlimited       bounded by cgroup limits
+Startup time        boot (minutes)  milliseconds (no kernel boot)
+```
+
+**What a container can NOT do by default:**
+- See host processes (`ps aux` shows only container's own)
+- Bind to host ports without `-p` mapping
+- Access host filesystem without a volume mount
+- Modify kernel parameters (no `sysctl` write)
+- Load kernel modules
+
+**What leaks through (shared kernel surface):**
+- Kernel vulnerabilities affect all containers on the host
+- `--privileged` flag removes almost all isolation — avoid in production
+- `hostNetwork: true` in K8s gives the container direct host network access
+
+```dockerfile
+# Security best practice — run as non-root
+RUN addgroup --system app && adduser --system --ingroup app app
+USER app          # don't run as root inside the container
+
+# Read-only filesystem — prevent runtime writes
+docker run --read-only --tmpfs /tmp myapp
+```
+
+**Container vs VM:**
+
+| | Container | VM |
+|---|---|---|
+| Kernel | Shared with host | Own kernel |
+| Startup | Milliseconds | Seconds–minutes |
+| Size | MBs | GBs |
+| Isolation | Namespace/cgroup | Full hardware virtualisation |
+| Security boundary | Weaker (shared kernel) | Stronger |
+| Use case | App packaging, microservices | Full OS isolation, untrusted workloads |
+
 ```dockerfile
 # Multi-stage build — small final image without build-time deps
 FROM python:3.12-slim AS builder
