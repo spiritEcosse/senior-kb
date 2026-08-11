@@ -188,10 +188,47 @@ from abc import ABC, abstractmethod
 class Shape(ABC):
     @abstractmethod
     def area(self) -> float: ...
+
+class Circle(Shape):
+    def __init__(self, radius: float):
+        self.radius = radius
+
+    def area(self) -> float:
+        return 3.14159 * self.radius ** 2
+
+# Shape()   → TypeError: нельзя создать экземпляр абстрактного класса
+c = Circle(5)
+print(c.area())  # 78.53975
 ```
 
-Попытка создать экземпляр с нереализованным абстрактным методом → `TypeError`.
-`Protocol` (typing) — структурная типизация (duck typing + type checking без наследования).
+### Protocol (структурная типизация)
+
+`Protocol` решает ту же задачу без наследования — класс удовлетворяет протоколу, просто реализуя нужные методы (duck typing + статическая проверка типов).
+
+```python
+from typing import Protocol
+
+class Drawable(Protocol):
+    def draw(self) -> None: ...
+
+class Circle:
+    def draw(self) -> None:
+        print("Drawing circle")
+
+class Square:
+    def draw(self) -> None:
+        print("Drawing square")
+
+def render(shape: Drawable) -> None:
+    shape.draw()
+
+render(Circle())  # ✓ — наследование не нужно
+render(Square())  # ✓
+
+# Ключевое отличие от ABC:
+# ABC      — проверка при создании экземпляра (runtime)
+# Protocol — проверка mypy/pyright на этапе type-check, без runtime-enforcement
+```
 
 ---
 
