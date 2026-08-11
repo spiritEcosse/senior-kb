@@ -22,3 +22,11 @@
 `asyncio.Lock()`, `asyncio.Semaphore()` — synchronisation primitives for async code.
 
 ---
+
+### Profilers
+
+- `Intel VTune`, `Valgrind` — for C extensions and multithreaded code
+- `memory_profiler` — Python memory usage profiling
+- `cProfile`, `py-spy`, `line_profiler` — for pure Python code
+
+---
