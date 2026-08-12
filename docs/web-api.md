@@ -18,10 +18,67 @@ Cons: harder HTTP caching, N+1 (→ DataLoader), harder monitoring.
 
 ### JWT (JSON Web Token)
 
-Structure: `header.payload.signature` (base64url).
-Header — algorithm (HS256/RS256). Payload — claims (sub, exp, iat). Signature — HMAC or RSA.
-Stateless: server only needs the secret/public key to verify.
-Risk: token cannot be revoked before expiry without a blocklist.
+Structure: `header.payload.signature` — each part is Base64Url-encoded, separated by dots.
+
+**Header** — algorithm and token type:
+```json
+{"alg": "HS256", "typ": "JWT"}
+```
+
+**Payload** — claims (never put secrets here — encoded, not encrypted):
+
+| Claim | Name | Description |
+|-------|------|-------------|
+| `sub` | Subject | Who the token is about — usually user ID |
+| `iat` | Issued At | Unix timestamp when token was created |
+| `exp` | Expiration | Unix timestamp after which token is invalid |
+| `nbf` | Not Before | Token invalid before this timestamp |
+| `iss` | Issuer | Who issued the token |
+| `aud` | Audience | Intended recipient(s) |
+| `jti` | JWT ID | Unique ID — prevents replay attacks |
+
+**Signature** — `ALGORITHM(base64url(header) + "." + base64url(payload), key)`:
+
+- **HS256** — symmetric: one shared secret signs and verifies. Fast, but every verifier can also forge tokens.
+- **RS256** — asymmetric: private key signs, public key verifies. Verifiers cannot forge tokens. Use with JWKS endpoint.
+
+| | HS256 | RS256 |
+|---|---|---|
+| Key | 1 shared secret | Private + Public pair |
+| Verifier can forge? | Yes | No |
+| JWKS endpoint | ✗ | ✓ |
+| Best for | Monolith / single service | Microservices / third parties |
+
+Stateless: server only needs the secret/public key to verify — no DB lookup.
+Risk: token cannot be revoked before expiry without a blocklist (e.g. Redis).
+
+```python
+import jwt
+from jwt import PyJWKClient
+
+# HS256 — sign and verify
+token = jwt.encode(
+    {"sub": "user_42", "exp": 1723500000, "iat": 1723496400},
+    "secret", algorithm="HS256"
+)
+payload = jwt.decode(token, "secret", algorithms=["HS256"])
+
+# RS256 — verify via JWKS
+jwks_client = PyJWKClient("https://auth.myapp.com/.well-known/jwks.json")
+signing_key = jwks_client.get_signing_key_from_jwt(token)
+payload = jwt.decode(token, signing_key.key, algorithms=["RS256"], audience="api.myapp.com")
+
+# Decode payload without verification (inspect only — never trust unverified)
+import base64, json
+part = token.split(".")[1] + "=="
+print(json.loads(base64.urlsafe_b64decode(part)))
+```
+
+**Token refresh pattern:**
+
+- `access_token` — short-lived (15 min), stateless
+- `refresh_token` — long-lived (7–30 days), stored server-side (DB/Redis), rotated on use
+- On expiry: client sends refresh_token → server validates → issues new access_token
 
 ### OAuth 2.0
 
@@ -453,3 +510,5 @@ async def create_order(
 - Service can be reused by CLI commands, background tasks, not just HTTP
 
 ---
+
+
