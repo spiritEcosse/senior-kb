@@ -110,15 +110,111 @@ asyncio.run(main())
 
 **Event loop: what actually happens**
 
+The event loop is a single infinite loop that does three things repeatedly:
+
+1. **Check the ready queue** — run all callbacks/coroutines that are ready right now (no I/O wait)
+2. **Poll I/O** — ask the OS (via `select`/`epoll`/`kqueue`) which file descriptors are ready; resume waiting coroutines
+3. **Check scheduled callbacks** — run anything whose `asyncio.sleep()` timer has expired
+
 ```
-event loop
-  ├── coroutine A: await network_call()  → suspended, loop moves on
-  ├── coroutine B: await db_query()      → suspended, loop moves on
-  ├── coroutine C: await asyncio.sleep() → suspended, loop moves on
-  └── network_call() completes → A resumes
+┌─────────────────────────────────────────────────────┐
+│                    Event Loop                        │
+│                                                      │
+│  ┌──────────────┐    ┌─────────────┐   ┌─────────┐  │
+│  │  Ready Queue │ →  │  I/O Poll   │ → │ Timers  │  │
+│  │  (run now)   │    │  (epoll)    │   │ (sleep) │  │
+│  └──────────────┘    └─────────────┘   └─────────┘  │
+│         ↑                   │                │       │
+│         └───────────────────┴────────────────┘       │
+│              completed I/O / expired timers           │
+└─────────────────────────────────────────────────────┘
 ```
 
-No parallelism — but no waiting either. 1000 concurrent requests cost roughly the same as 10.
+**Step by step — three coroutines, one thread:**
+
+```python
+import asyncio, time
+
+async def fetch(name, delay):
+    print(f"{name}: start")
+    await asyncio.sleep(delay)     # yields control to event loop
+    print(f"{name}: done after {delay}s")
+    return name
+
+async def main():
+    start = time.perf_counter()
+    results = await asyncio.gather(
+        fetch("A", 1),
+        fetch("B", 2),
+        fetch("C", 1),
+    )
+    print(f"total: {time.perf_counter() - start:.1f}s")  # ~2s, not 4s
+
+asyncio.run(main())
+```
+
+```
+t=0.0s  event loop starts
+        → schedules A, B, C into ready queue
+        → runs A: prints "A: start", hits await sleep(1) → suspends, registers timer 1s
+        → runs B: prints "B: start", hits await sleep(2) → suspends, registers timer 2s
+        → runs C: prints "C: start", hits await sleep(1) → suspends, registers timer 1s
+        → ready queue empty → polls I/O (nothing) → checks timers (nothing yet)
+        → event loop sleeps (OS level) until earliest timer
+
+t=1.0s  timers for A and C fire → both added to ready queue
+        → runs A: prints "A: done after 1s", returns "A"
+        → runs C: prints "C: done after 1s", returns "C"
+        → ready queue empty → waits for B's timer
+
+t=2.0s  timer for B fires
+        → runs B: prints "B: done after 2s", returns "B"
+        → gather() sees all done → main() continues
+        → prints "total: 2.0s"
+```
+
+**Why `await` is the key:**
+`await` is a yield point — it tells the event loop "I'm waiting for something, go do other work". Without `await`, the coroutine runs to completion without ever giving control back.
+
+```python
+# This blocks the ENTIRE event loop for 2 seconds — nothing else can run
+async def bad():
+    time.sleep(2)          # ← not async, no yield, freezes the loop
+
+# This suspends only this coroutine — loop runs other tasks during the wait
+async def good():
+    await asyncio.sleep(2) # ← yield point, loop stays responsive
+```
+
+**Under the hood — `select`/`epoll`:**
+
+When all coroutines are suspended waiting for I/O, the event loop calls `epoll_wait()` (Linux) or `kqueue` (macOS) — a single OS syscall that blocks until ANY of the watched file descriptors becomes ready. This is how one thread handles thousands of connections: it's not doing anything while waiting, just letting the OS tell it when work is available.
+
+```python
+# Conceptual implementation of the event loop core:
+while True:
+    # 1. Run everything that's ready
+    for callback in ready_queue:
+        callback()
+
+    # 2. Ask OS: which sockets have data? (blocks until at least one does)
+    timeout = next_timer_expiry()
+    ready_fds = epoll.poll(timeout=timeout)
+
+    # 3. Wake up coroutines whose I/O is ready
+    for fd in ready_fds:
+        waiting_coroutines[fd].send(None)   # resume
+
+    # 4. Fire expired timers
+    for timer in expired_timers():
+        timer.callback()
+```
+
+**Key properties:**
+- Single thread → no locks needed for coroutine-shared state (as long as no `await` between read and write)
+- Cooperative → a coroutine that never `await`s starves everyone else
+- I/O-bound → shines when tasks spend most time waiting for network/disk
+- CPU-bound → use `run_in_executor` to offload to a thread/process pool
 
 **Fan-out patterns:**
 
