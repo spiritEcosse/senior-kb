@@ -591,3 +591,249 @@ df = df.sort_index()
 - `merge` / `join` on index columns skips a sort step
 - `groupby` on an indexed column is marginally faster
 
+
+---
+
+## Pandas Alternatives: Polars and PyArrow
+
+### Polars
+
+Polars is a DataFrame library written in **Rust**, designed from scratch for speed and memory efficiency. It has no pandas dependency and does not use NumPy internally.
+
+**Why Polars is faster than pandas:**
+- Written in Rust — no GIL, true multi-threading
+- Columnar storage via Apache Arrow
+- Lazy evaluation — builds a query plan, optimises it before executing
+- SIMD vectorisation for CPU-level parallelism
+- No index overhead (pandas index is often wasted work)
+
+```python
+import polars as pl
+
+# Eager mode — executes immediately, like pandas
+df = pl.read_csv('data.csv')
+
+# Lazy mode — builds a plan, optimises, then executes
+df = (
+    pl.scan_csv('huge.csv')          # scan = lazy read
+      .filter(pl.col('amount') > 0)
+      .group_by('category')
+      .agg(pl.col('amount').sum().alias('total'))
+      .sort('total', descending=True)
+      .collect()                      # execute here
+)
+```
+
+**API comparison with pandas:**
+
+```python
+# --- Select columns ---
+# pandas
+df[['name', 'age']]
+# polars
+df.select(['name', 'age'])
+df.select(pl.col('name'), pl.col('age'))
+
+# --- Filter rows ---
+# pandas
+df[df['age'] > 30]
+# polars
+df.filter(pl.col('age') > 30)
+
+# --- Add column ---
+# pandas
+df['senior'] = df['age'] >= 60
+# polars (immutable — returns new df)
+df = df.with_columns((pl.col('age') >= 60).alias('senior'))
+
+# --- GroupBy ---
+# pandas
+df.groupby('dept')['salary'].mean()
+# polars
+df.group_by('dept').agg(pl.col('salary').mean())
+
+# --- Multiple aggregations ---
+# polars
+df.group_by('dept').agg([
+    pl.col('salary').mean().alias('avg_salary'),
+    pl.col('salary').max().alias('max_salary'),
+    pl.len().alias('count'),
+])
+
+# --- Join ---
+# polars
+users.join(orders, left_on='id', right_on='user_id', how='inner')
+```
+
+**Key differences from pandas:**
+
+| | pandas | Polars |
+|---|---|---|
+| Language | Python/C | Rust |
+| Threading | GIL-limited | True multi-threading |
+| Index | Always present | No index concept |
+| Mutation | In-place possible | Immutable — always returns new df |
+| Lazy eval | Via Dask only | Built-in (`scan_csv`, `.lazy()`) |
+| Null handling | `NaN` (float) + `None` | `null` (consistent across types) |
+| Memory | NumPy arrays | Apache Arrow buffers |
+| Speed | Baseline | 5–50× faster on large data |
+| pandas compat | N/A | `df.to_pandas()` / `pl.from_pandas()` |
+
+**Interop with pandas:**
+
+```python
+# Polars → pandas
+pandas_df = polars_df.to_pandas()
+
+# pandas → Polars
+polars_df = pl.from_pandas(pandas_df)
+
+# Read parquet (fastest format for both)
+df = pl.read_parquet('data.parquet')
+df = pl.scan_parquet('data/*.parquet').collect()   # lazy, multi-file
+```
+
+**When to use Polars over pandas:**
+- Large datasets (>1M rows) where speed matters
+- Multi-core machines — Polars uses all cores automatically
+- Complex transformation pipelines (lazy optimizer helps a lot)
+- Memory is tight — Arrow is more efficient than NumPy for mixed types
+
+---
+
+### PyArrow
+
+PyArrow is the Python binding for **Apache Arrow** — a cross-language in-memory columnar format. It is the foundation that both pandas 2.x and Polars are built on.
+
+**What Arrow is:**
+- A standardised in-memory columnar format — zero-copy data sharing between libraries
+- C++ implementation with Python bindings
+- The wire format used by Parquet, ORC, Feather, Flight (gRPC for data)
+
+```python
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+import pyarrow.csv as pa_csv
+
+# Create a table
+table = pa.table({
+    'name':   ['Alice', 'Bob', 'Charlie'],
+    'age':    pa.array([30, 25, 35], type=pa.int32()),
+    'salary': pa.array([90000.0, 75000.0, 110000.0], type=pa.float32()),
+})
+
+print(table.schema)
+# name: string
+# age: int32
+# salary: float
+
+# Column access
+table['name']               # ChunkedArray
+table.column('age')         # same
+
+# Filter with compute
+mask = pc.greater(table['age'], 28)
+filtered = table.filter(mask)
+
+# Aggregation
+pc.mean(table['salary'])    # Scalar
+pc.sum(table['age'])
+```
+
+**Parquet — the go-to format for large data:**
+
+```python
+# Write
+pq.write_table(table, 'data.parquet', compression='snappy')
+
+# Read full file
+table = pq.read_table('data.parquet')
+
+# Read only specific columns — huge speedup (columnar format)
+table = pq.read_table('data.parquet', columns=['name', 'salary'])
+
+# Read with filter pushdown — skips row groups entirely
+table = pq.read_table(
+    'data.parquet',
+    columns=['name', 'salary'],
+    filters=[('age', '>', 28)]    # applied at read time, not after loading
+)
+
+# pandas ↔ Arrow
+import pandas as pd
+df = table.to_pandas()
+table = pa.Table.from_pandas(df)
+```
+
+**CSV reading with PyArrow (faster than pandas for large files):**
+
+```python
+table = pa_csv.read_csv('huge.csv')
+# or with options
+table = pa_csv.read_csv(
+    'huge.csv',
+    read_options=pa_csv.ReadOptions(block_size=1 << 26),   # 64MB blocks
+    convert_options=pa_csv.ConvertOptions(
+        column_types={'user_id': pa.int32(), 'amount': pa.float32()}
+    )
+)
+```
+
+**Arrow as pandas 2.x backend:**
+
+```python
+# pandas 2.x can use Arrow arrays instead of NumPy under the hood
+df = pd.read_csv('data.csv', dtype_backend='pyarrow')
+print(df.dtypes)
+# name      string[pyarrow]
+# age       int64[pyarrow]
+# salary    double[pyarrow]
+
+# Or convert existing df
+df = df.convert_dtypes(dtype_backend='pyarrow')
+
+# Benefits: nullable types, better memory, faster string ops
+```
+
+**Ecosystem overview:**
+
+```
+Apache Arrow (in-memory columnar format)
+        │
+        ├── pandas 2.x  (optional Arrow backend)
+        ├── Polars       (Arrow-native, Rust)
+        ├── Dask         (partitions are pandas/Arrow)
+        ├── DuckDB       (queries Arrow tables directly)
+        └── PyArrow      (Python API — read/write Parquet, Flight, IPC)
+```
+
+**DuckDB — bonus: SQL on DataFrames:**
+
+```python
+import duckdb
+
+# Query pandas/polars/arrow directly with SQL — extremely fast
+result = duckdb.sql("""
+    SELECT category, SUM(amount) as total
+    FROM 'huge.csv'
+    WHERE amount > 0
+    GROUP BY category
+    ORDER BY total DESC
+""").df()   # → pandas DataFrame
+
+# Or query an existing DataFrame
+df = pd.read_parquet('data.parquet')
+result = duckdb.sql("SELECT * FROM df WHERE age > 30").df()
+```
+
+**When to use what:**
+
+| Tool | Best for |
+|---|---|
+| pandas | General data work, rich ecosystem, familiar API |
+| Polars | Large data, speed, multi-core, modern API |
+| PyArrow | Parquet I/O, zero-copy interop, Arrow Flight |
+| Dask | Pandas API on data that doesn't fit RAM, distributed |
+| DuckDB | SQL on files/DataFrames, analytics queries |
+
