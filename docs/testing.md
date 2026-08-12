@@ -287,3 +287,77 @@ class OrderService:
 ```
 
 ---
+
+---
+
+### Mocking the database — when does it make sense?
+
+**Yes — mocking the DB is worth it when DB-integrated tests are slow.**
+
+Real DB tests (hitting PostgreSQL, MongoDB) typically take 10–100× longer than unit tests with mocked DB:
+- Setting up fixtures, transactions, teardown
+- Network/disk I/O even on localhost
+- Schema migrations on test DB
+
+```python
+# Mock the repository layer — fast unit test, no DB needed
+from unittest.mock import AsyncMock, MagicMock
+import pytest
+from services.order_service import OrderService
+
+@pytest.mark.asyncio
+async def test_create_order_insufficient_stock():
+    order_repo = AsyncMock()
+    product_repo = AsyncMock()
+    product_repo.get.return_value = MagicMock(stock=2)  # only 2 in stock
+
+    service = OrderService(order_repo, product_repo)
+
+    with pytest.raises(InsufficientStockError):
+        await service.create_order(user_id=1, product_id=5, qty=10)
+
+    order_repo.create.assert_not_called()   # no order created
+```
+
+**The rule: mock at the boundary you own**
+
+```
+Endpoint tests  → mock Service
+Service tests   → mock Repository
+Repository tests → use real DB (these are integration tests)
+```
+
+**When to use a real DB (don't mock):**
+- Testing the repository layer itself — SQL queries, ORM behavior, transactions
+- Testing DB constraints (unique, FK, check constraints)
+- Testing migrations
+- End-to-end / integration tests
+
+**Tools for fast DB tests when you need the real thing:**
+
+```python
+# pytest-django — wraps each test in a transaction, rolls back after
+@pytest.mark.django_db(transaction=False)   # default: rollback after each test
+
+# SQLite in-memory for unit tests (fast, no setup)
+DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+
+# testcontainers — real Postgres in Docker, created per test session
+from testcontainers.postgres import PostgresContainer
+
+@pytest.fixture(scope="session")
+def postgres():
+    with PostgresContainer("postgres:16") as pg:
+        yield pg.get_connection_url()
+```
+
+**Summary:**
+
+| Test type | DB strategy | Speed |
+|---|---|---|
+| Service / business logic | Mock repository | ⚡ Fast (ms) |
+| Repository / ORM queries | Real DB (SQLite or testcontainers) | 🐢 Slower but necessary |
+| API endpoint | Mock service or real DB + fixtures | Depends |
+| Full integration / E2E | Real DB, real services | Slowest — run in CI only |
+
+---

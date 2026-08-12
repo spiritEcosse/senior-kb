@@ -600,3 +600,62 @@ __all__ = ['PublicClass', 'public_function']   # private_helper not exported
 ```
 
 ---
+
+---
+
+### Type hints — do they impact runtime speed?
+
+**Short answer: No at runtime, but yes for `__pycache__` generation.**
+
+Type hints are **purely static** — they exist only for tools like `mypy`, `pyright`, and IDEs. At runtime, Python stores them in `__annotations__` but does **not enforce them**.
+
+```python
+def add(x: int, y: int) -> int:
+    return x + y
+
+add("hello", "world")   # works fine at runtime — no error
+print(add.__annotations__)  # {'x': <class 'int'>, 'y': <class 'int'>, 'return': <class 'int'>}
+```
+
+**Runtime cost is negligible:**
+- Annotations are parsed once at module import and stored as strings (with `from __future__ import annotations`) or as evaluated objects
+- No checking happens on each function call
+- `from __future__ import annotations` (PEP 563) defers evaluation → annotations stored as strings → zero evaluation cost
+
+```python
+from __future__ import annotations   # all annotations become strings, never evaluated
+
+def process(items: list[User]) -> dict[str, int]:  # 'list[User]' stored as string
+    ...
+```
+
+**Do type hints affect `__pycache__` / bytecode?**
+
+Yes — indirectly. Python compiles every `.py` file to bytecode (`.pyc` in `__pycache__`) regardless of whether it has type hints. But:
+
+- Adding type hints **changes the source** → Python sees the file changed → recompiles to a new `.pyc`
+- A file **without** any type hints still gets compiled to `.pyc` — Python always creates bytecode
+- `from __future__ import annotations` makes annotation strings shorter → slightly smaller bytecode, faster import
+
+**To be precise:** Python **always** creates `__pycache__` bytecode for any `.py` file that gets imported. Type hints do not control whether bytecode is created — only whether the source file is considered changed (triggering recompilation). If you delete `__pycache__`, Python recreates it on next import with or without type hints.
+
+```python
+# Without from __future__ import annotations:
+# list[User] is evaluated at import — creates User object reference in bytecode
+
+# With from __future__ import annotations:
+# list[User] is stored as the string 'list[User]' — cheaper, forward references work
+```
+
+**Summary:**
+
+| Concern | Impact |
+|---|---|
+| Runtime type enforcement | None — Python ignores annotations at runtime |
+| Per-call overhead | None |
+| Import time | Tiny — annotations parsed once |
+| `__pycache__` creation | Always happens — type hints don't control it |
+| Changing type hints | Triggers recompile of `.pyc` (source changed) |
+| `from __future__ import annotations` | Slightly faster import, enables forward refs |
+
+---

@@ -320,3 +320,89 @@ async def metrics_middleware(request, call_next):
 ```
 
 ---
+
+---
+
+### Docker: CMD vs RUN vs ENTRYPOINT
+
+```dockerfile
+# RUN — executes during IMAGE BUILD; result is committed as a new layer
+RUN apt-get update && apt-get install -y curl
+RUN pip install -r requirements.txt
+
+# CMD — default command when CONTAINER STARTS; overridable at runtime
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# ENTRYPOINT — fixed executable; CMD becomes its default arguments
+ENTRYPOINT ["python", "-m"]
+CMD ["myapp"]
+# → docker run myimage           runs: python -m myapp
+# → docker run myimage othercmd  runs: python -m othercmd
+```
+
+| Instruction | When | Overridable |
+|---|---|---|
+| `RUN` | Build time — creates image layer | N/A (it's baked in) |
+| `CMD` | Container start — default command | Yes: `docker run image <cmd>` |
+| `ENTRYPOINT` | Container start — fixed executable | Only with `--entrypoint` flag |
+
+**Typical pattern:**
+
+```dockerfile
+ENTRYPOINT ["uvicorn"]          # always run uvicorn
+CMD ["main:app", "--port", "8000"]   # default args, overridable
+```
+
+```bash
+docker run myapp                            # uvicorn main:app --port 8000
+docker run myapp main:app --port 9000       # override port
+docker run --entrypoint bash myapp          # override entrypoint entirely
+```
+
+---
+
+### Docker Volumes
+
+A **volume** is persistent storage that lives outside the container's writable layer. When a container is removed, its writable layer is destroyed — volumes survive.
+
+**Three types:**
+
+```bash
+# 1. Named volume — managed by Docker, stored in /var/lib/docker/volumes/
+docker volume create mydata
+docker run -v mydata:/app/data myimage
+
+# 2. Bind mount — maps a host path into the container
+docker run -v /home/ihor/project:/app myimage
+# Common in dev: host source code → container, so changes reflect immediately
+
+# 3. tmpfs mount — in-memory only, not persisted
+docker run --tmpfs /tmp myimage
+```
+
+**In docker-compose:**
+
+```yaml
+services:
+  db:
+    image: postgres:16
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # named volume — data survives restart
+
+  web:
+    build: .
+    volumes:
+      - .:/app          # bind mount — dev hot-reload
+      - /app/node_modules  # anonymous volume — don't overwrite container's node_modules
+
+volumes:
+  postgres_data:   # declares the named volume
+```
+
+**Why volumes matter:**
+- Database data (`/var/lib/postgresql/data`) must survive container restarts → named volume
+- Dev workflow: edit code on host, see changes in container immediately → bind mount
+- Secrets/config files injected at runtime → bind mount
+- Without a volume, all container writes are lost on `docker rm`
+
+---

@@ -398,3 +398,196 @@ result = df[df['value'] > 0].groupby('category')['value'].sum().compute()
 ```
 
 ---
+
+---
+
+## Pandas — Advanced
+
+### Querying by columns
+
+```python
+# Select specific columns
+df[['name', 'age']]
+df.loc[:, ['name', 'age']]       # label-based, explicit
+df.iloc[:, [0, 2]]               # position-based
+
+# Filter rows
+df[df['age'] > 30]
+df.query('age > 30 and city == "Madrid"')   # string DSL — readable, slightly faster on large frames
+
+# Multiple conditions
+df[(df['age'] > 30) & (df['salary'] < 80_000)]
+
+# isin / between
+df[df['city'].isin(['Madrid', 'Valencia'])]
+df[df['age'].between(25, 40)]
+
+# Add derived column without mutation
+df = df.assign(senior=df['age'] >= 60)
+
+# Select only numeric columns
+df.select_dtypes(include='number')
+
+# Drop columns
+df.drop(columns=['col1', 'col2'])
+```
+
+---
+
+### Reading huge files that don't fit in memory
+
+#### `chunksize` — sequential streaming
+
+```python
+result = []
+for chunk in pd.read_csv('huge.csv', chunksize=100_000):
+    # Each chunk is a full DataFrame of 100k rows
+    result.append(chunk[chunk['value'] > 0].groupby('category')['value'].sum())
+
+final = pd.concat(result).groupby(level=0).sum()
+```
+
+!!! note "Does pandas pre-scan the file?"
+    **No.** `chunksize` returns a `TextFileReader` iterator. Pandas reads **sequentially**, N rows at a time, and discards each chunk after you process it. There is **no forecast, no pre-scan, no schema inference** beyond the header row. If column types vary mid-file (e.g. a string appears in what looked like an int column), pandas will raise mid-iteration. Use `dtype=` explicitly to avoid surprises:
+
+```python
+for chunk in pd.read_csv('huge.csv', chunksize=100_000,
+                          usecols=['user_id', 'amount', 'status'],
+                          dtype={'user_id': 'int32', 'amount': 'float32', 'status': 'category'}):
+    process(chunk)
+```
+
+#### Read only specific columns
+
+```python
+# Read only what you need — huge memory saving
+df = pd.read_csv('huge.csv', usecols=['user_id', 'created_at', 'amount'])
+
+# With chunking
+for chunk in pd.read_csv('huge.csv',
+                          usecols=['user_id', 'amount'],
+                          chunksize=50_000):
+    process(chunk)
+```
+
+#### Dask — parallel, lazy, out-of-core
+
+Dask is **not** a wrapper around `pd.read_csv` with `chunksize`. It builds a **task graph** — a DAG of operations that are evaluated lazily only when you call `.compute()`. Dask partitions the file into chunks and can run them in parallel across CPU cores or even a distributed cluster.
+
+```python
+import dask.dataframe as dd
+
+# Reads only the metadata + schema — no data loaded yet
+df = dd.read_csv('huge.csv')           # or 'data/*.csv' for multiple files
+print(df.dtypes)                       # available immediately
+print(df.npartitions)                  # number of chunks Dask will use
+
+# Build a lazy computation graph — nothing runs yet
+result = (
+    df[df['amount'] > 0]
+      .groupby('category')['amount']
+      .sum()
+)
+
+# .compute() executes the whole graph, returns a pandas Series
+final = result.compute()
+```
+
+**How Dask differs from `chunksize`:**
+
+| | `chunksize` | Dask |
+|---|---|---|
+| Execution | Sequential, one chunk at a time | Parallel across cores/cluster |
+| API | You write the loop | Drop-in pandas API |
+| Lazy evaluation | No | Yes — builds DAG first |
+| Memory | One chunk in RAM | Only active partitions |
+| Multi-file | Manual glob + concat | Native: `dd.read_csv('data/*.csv')` |
+| Distributed | No | Yes (Dask Distributed) |
+| `.compute()` needed | No | Yes — to get a pandas result |
+
+```python
+# Dask with specific columns and types
+df = dd.read_csv('huge.csv',
+                  usecols=['user_id', 'amount'],
+                  dtype={'user_id': 'int32', 'amount': 'float32'})
+
+# Works on multiple files transparently
+df = dd.read_csv('data/2024-*.csv')
+```
+
+**When to use Dask vs chunksize:**
+- `chunksize` — simple pipelines, single-pass aggregation, low complexity
+- Dask — complex multi-step transformations, joins across partitions, multi-core speedup, or truly distributed workloads
+
+---
+
+### Pandas data types
+
+| pandas dtype | Backed by | When to use |
+|---|---|---|
+| `int64` | NumPy | Default integer |
+| `int32`, `int16`, `int8` | NumPy | Downcast to save memory |
+| `float64` | NumPy | Default float |
+| `float32` | NumPy | ML features, saves memory |
+| `object` | Python objects | Strings (legacy default) |
+| `string` | Arrow/StringDtype | Preferred for strings in pandas 2.x |
+| `category` | int codes + lookup | Low-cardinality strings (status, gender) |
+| `bool` | NumPy | Boolean flags |
+| `datetime64[ns]` | NumPy | Timestamps |
+| `timedelta64[ns]` | NumPy | Durations |
+| `Int64` (nullable) | pandas ExtensionArray | Integer with NaN support |
+| `Float64` (nullable) | pandas ExtensionArray | Float with explicit NA |
+
+```python
+# Check types
+df.dtypes
+df.memory_usage(deep=True)
+
+# Downcast to save memory
+df['age']    = pd.to_numeric(df['age'],    downcast='integer')   # int64 → int8
+df['price']  = pd.to_numeric(df['price'],  downcast='float')     # float64 → float32
+df['status'] = df['status'].astype('category')
+
+# Explicit dtype on read
+df = pd.read_csv('data.csv', dtype={
+    'user_id': 'int32',
+    'amount':  'float32',
+    'status':  'category',
+    'active':  'bool',
+})
+```
+
+---
+
+### Indexes in pandas
+
+```python
+# Default RangeIndex (0, 1, 2, ...) — free, no memory cost
+df = pd.DataFrame({'name': ['Alice', 'Bob'], 'score': [95, 82]})
+
+# Set a column as index — fast label-based lookups with .loc
+df = df.set_index('name')
+df.loc['Alice']   # O(1) hash lookup
+
+# Reset index — turn it back into a column
+df = df.reset_index()
+
+# MultiIndex — hierarchical index
+df = df.set_index(['dept', 'level'])
+df.loc[('eng', 'senior')]
+
+# DatetimeIndex — enables time-based slicing
+df.index = pd.to_datetime(df['date'])
+df.loc['2024-01']          # all rows in January 2024
+df.loc['2024-01':'2024-03']
+
+# sort_index — required for slicing to work correctly on non-monotonic indexes
+df = df.sort_index()
+```
+
+**When does a pandas index actually speed things up?**
+- `.loc[]` lookups on a set index are O(1) for unique indexes
+- Time-series slicing on a `DatetimeIndex`
+- `merge` / `join` on index columns skips a sort step
+- `groupby` on an indexed column is marginally faster
+

@@ -241,3 +241,215 @@ def verify_webhook(body: bytes, timestamp: str, signature: str, secret: str) -> 
 - Make handlers idempotent (same event delivered twice = same result)
 
 ---
+
+---
+
+### Deprecation warnings via headers
+
+When deprecating an API endpoint, signal it to clients via response headers — many API gateways, SDKs, and monitoring tools read these automatically:
+
+```python
+# FastAPI example
+from fastapi import Response
+from fastapi.responses import JSONResponse
+
+@app.get("/api/v1/users/{id}")
+async def get_user_v1(id: int, response: Response):
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "Sat, 31 Dec 2025 23:59:59 GMT"   # RFC 7231 date
+    response.headers["Link"] = '</api/v2/users/{id}>; rel="successor-version"'
+    response.headers["Warning"] = '299 - "This endpoint is deprecated. Use /api/v2/users/"'
+    return get_user_data(id)
+```
+
+**Standard headers:**
+
+| Header | Purpose | Who reads it |
+|---|---|---|
+| `Deprecation: true` | Marks endpoint as deprecated (RFC 8594) | API clients, SDKs |
+| `Sunset: <date>` | When the endpoint will be removed | Monitoring, client devs |
+| `Link: <url>; rel="successor-version"` | Points to replacement | Automated tools |
+| `Warning: 299 - "message"` | Human-readable warning | Browsers, curl, logging |
+
+**Yes — other servers and tools do read these:**
+- API gateways (Kong, AWS API Gateway) can alert on `Deprecation` headers
+- OpenAPI generators surface them in docs
+- SDKs like the GitHub client emit log warnings when they see `Deprecation`
+- Monitoring systems (Datadog, Grafana) can track deprecation header rates
+
+---
+
+### gRPC
+
+**What it is:** Remote Procedure Call framework by Google. Uses HTTP/2 as transport and Protocol Buffers (protobuf) as the serialization format.
+
+**Why use it over REST:**
+
+| | REST/JSON | gRPC |
+|---|---|---|
+| Serialization | JSON (text, verbose) | Protobuf (binary, ~5–10× smaller) |
+| Speed | Slower | Faster (binary + HTTP/2 multiplexing) |
+| Schema | Optional (OpenAPI) | Mandatory `.proto` — strong contract |
+| Streaming | Workarounds (SSE, WebSocket) | Native bi-directional streaming |
+| Browser support | Native | Needs grpc-web proxy |
+| Use case | Public APIs, browser clients | Internal microservices |
+
+**Define a service in `.proto`:**
+
+```protobuf
+// user_service.proto
+syntax = "proto3";
+
+service UserService {
+  rpc GetUser      (GetUserRequest)    returns (User);
+  rpc ListUsers    (ListUsersRequest)  returns (stream User);     // server streaming
+  rpc CreateUser   (CreateUserRequest) returns (User);
+}
+
+message GetUserRequest { int32 id = 1; }
+message ListUsersRequest { int32 page = 1; int32 page_size = 2; }
+message CreateUserRequest { string name = 1; string email = 2; }
+message User { int32 id = 1; string name = 2; string email = 3; }
+```
+
+**Python server (grpcio):**
+
+```python
+import grpc
+from concurrent import futures
+import user_service_pb2, user_service_pb2_grpc
+
+class UserServicer(user_service_pb2_grpc.UserServiceServicer):
+    def GetUser(self, request, context):
+        user = db.get_user(request.id)
+        if not user:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details("User not found")
+            return user_service_pb2.User()
+        return user_service_pb2.User(id=user.id, name=user.name, email=user.email)
+
+    def ListUsers(self, request, context):
+        for user in db.list_users(page=request.page, page_size=request.page_size):
+            yield user_service_pb2.User(id=user.id, name=user.name)
+
+def serve():
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    user_service_pb2_grpc.add_UserServiceServicer_to_server(UserServicer(), server)
+    server.add_insecure_port('[::]:50051')
+    server.start()
+    server.wait_for_termination()
+```
+
+**Python client:**
+
+```python
+import grpc
+import user_service_pb2, user_service_pb2_grpc
+
+with grpc.insecure_channel('localhost:50051') as channel:
+    stub = user_service_pb2_grpc.UserServiceStub(channel)
+    user = stub.GetUser(user_service_pb2.GetUserRequest(id=42))
+    print(user.name)
+
+    # Server streaming
+    for user in stub.ListUsers(user_service_pb2.ListUsersRequest(page=1, page_size=10)):
+        print(user.name)
+```
+
+**gRPC streaming types:**
+
+| Type | Direction | Use case |
+|---|---|---|
+| Unary | request → response | Standard call |
+| Server streaming | request → stream of responses | Real-time feeds, large result sets |
+| Client streaming | stream of requests → response | File upload, batch insert |
+| Bidirectional | stream ↔ stream | Chat, live collaboration |
+
+**Code generation:**
+
+```bash
+pip install grpcio grpcio-tools
+python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. user_service.proto
+```
+
+---
+
+### FastAPI — Business logic in repositories, not endpoints
+
+**Why:** Single Responsibility Principle. Each layer has one job:
+
+- **Endpoint** — HTTP: parse request, validate input (Pydantic), call service/repo, return response
+- **Repository** — data access only: SQL/Mongo queries, no business rules
+- **Service** (optional) — orchestrates repositories, contains business logic
+
+**Bad — logic in endpoint:**
+
+```python
+@app.post("/orders/")
+async def create_order(data: OrderCreate, db: AsyncSession = Depends(get_db)):
+    # business logic + DB access mixed in endpoint
+    if data.quantity <= 0:
+        raise HTTPException(400, "Quantity must be positive")
+    product = await db.get(Product, data.product_id)
+    if not product or product.stock < data.quantity:
+        raise HTTPException(400, "Insufficient stock")
+    product.stock -= data.quantity
+    order = Order(user_id=data.user_id, product_id=data.product_id, qty=data.quantity)
+    db.add(order)
+    await db.commit()
+    return order
+```
+
+**Good — repository pattern:**
+
+```python
+# repositories/order_repo.py
+class OrderRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def create(self, user_id: int, product_id: int, qty: int) -> Order:
+        order = Order(user_id=user_id, product_id=product_id, qty=qty)
+        self.session.add(order)
+        await self.session.flush()   # get ID without committing
+        return order
+
+    async def get_by_user(self, user_id: int) -> list[Order]:
+        result = await self.session.execute(
+            select(Order).where(Order.user_id == user_id)
+        )
+        return result.scalars().all()
+
+# services/order_service.py
+class OrderService:
+    def __init__(self, order_repo: OrderRepository, product_repo: ProductRepository):
+        self.orders = order_repo
+        self.products = product_repo
+
+    async def create_order(self, user_id: int, product_id: int, qty: int) -> Order:
+        product = await self.products.get(product_id)
+        if not product or product.stock < qty:
+            raise InsufficientStockError(product_id)
+        await self.products.decrement_stock(product_id, qty)
+        return await self.orders.create(user_id, product_id, qty)
+
+# endpoints/orders.py
+@router.post("/orders/", response_model=OrderResponse)
+async def create_order(
+    data: OrderCreate,
+    service: OrderService = Depends(get_order_service)
+):
+    try:
+        order = await service.create_order(data.user_id, data.product_id, data.quantity)
+        return order
+    except InsufficientStockError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+```
+
+**Benefits:**
+- Endpoints stay thin — easy to read, easy to version
+- Business logic is testable without HTTP layer
+- Repository is swappable (swap Postgres for MongoDB in tests)
+- Service can be reused by CLI commands, background tasks, not just HTTP
+
+---
