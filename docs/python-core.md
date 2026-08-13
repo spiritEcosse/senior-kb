@@ -54,6 +54,26 @@ Beyond reference counting — cyclic GC (`gc` module) to detect circular referen
 - Iterator — implements `__next__`; raises `StopIteration` when exhausted
 - Generator — function with `yield`; automatically an iterator; lazy evaluation
 
+**`yield` vs `return` vs `yield from`:**
+- `return value` — exits the function immediately, returns a value (not a generator)
+- `yield value` — suspends the function, emits a value, resumes on next `next()` call
+- `yield from iterable` — delegates to another iterable/generator, exhausting it fully; equivalent to `for item in iterable: yield item` but more efficient
+
+```python
+# yield from — correct way to recurse in a generator
+def flatten(data):
+    for item in data:
+        if isinstance(item, list):
+            yield from flatten(item)  # delegates to recursive generator
+        else:
+            yield item
+
+list(flatten([1, [2, [3, 4]], 5]))  # [1, 2, 3, 4, 5]
+
+# yield — emits the generator object itself (wrong for recursion)
+# return — exits immediately, only first item processed
+```
+
 **List comprehension vs Generator expression:**
 - `[x**2 for x in nums]` — full list in memory at once
 - `(x**2 for x in nums)` — one element at a time; better for large/infinite sequences
@@ -441,7 +461,11 @@ reduce(lambda acc, x: acc + x, [], 0)   # 0 (not an error)
 `type(name, bases, attrs)` — creates a new class dynamically.
 
 **Metaclasses:**
-A metaclass controls class creation. It defines `__new__(cls, name, bases, attrs)`.
+A metaclass controls class creation. It can define `__new__` or `__init__` (or both).
+
+**`__new__` vs `__init__` in a metaclass:**
+- `__new__(cls, name, bases, attrs)` — creates and returns the class object; `cls` is the metaclass
+- `__init__(cls, name, bases, attrs)` — called after the class is created; `cls` is already the new class
 
 ```python
 class MyMeta(type):
@@ -455,7 +479,19 @@ class MyClass(metaclass=MyMeta):
 print(MyClass.custom_attr)  # 42
 ```
 
-Use cases: ORM (Django Models), API frameworks, class validation.
+**Using `__init__` instead — class already exists as `cls`:**
+```python
+class Registry(type):
+    all = {}
+
+    def __init__(cls, name, bases, attrs):
+        super().__init__(name, bases, attrs)
+        Registry.all[name] = cls  # cls is the newly created class
+```
+
+**Key distinction:** In a regular class `__init__` receives `self` (an instance). In a metaclass `__init__` receives `cls` (a class) — because classes are instances of their metaclass.
+
+Use cases: ORM (Django Models), API frameworks, class validation, auto-registration.
 
 ---
 
