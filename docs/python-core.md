@@ -232,6 +232,46 @@ class MyModel:
     age = Validator()
 ```
 
+`@property` is syntactic sugar over the descriptor protocol — it builds a data descriptor for you:
+
+```python
+class Temperature:
+    def __init__(self, celsius):
+        self.celsius = celsius  # goes through the setter immediately
+
+    @property
+    def celsius(self):
+        return self._celsius
+
+    @celsius.setter
+    def celsius(self, value):
+        if value < -273.15:
+            raise ValueError("Temperature below absolute zero")
+        self._celsius = value
+
+    @property
+    def fahrenheit(self):
+        return (self.celsius * 9 / 5) + 32
+
+    @fahrenheit.setter
+    def fahrenheit(self, value):
+        self.celsius = (value - 32) * 5 / 9  # delegates validation to celsius setter
+
+t = Temperature(100)
+print(t.celsius)    # 100
+print(t.fahrenheit) # 212.0
+
+t.fahrenheit = 32
+print(t.celsius)    # 0.0
+
+t.celsius = -300    # ValueError: Temperature below absolute zero
+```
+
+Key points:
+- `_celsius` is the real storage; `celsius` is the managed interface
+- Both properties share one validation path — `fahrenheit.setter` delegates to `celsius.setter`
+- `__init__` assigns via `self.celsius = celsius`, so validation runs from the start
+
 ---
 
 ### ABC (Abstract Base Classes)
