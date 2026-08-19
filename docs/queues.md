@@ -125,3 +125,28 @@ Order Service publishes: OrderCreated
 | Use case | Task queues, RPC, routing | Event streaming, audit log, data pipelines |
 
 ---
+
+**Kafka Consumer Groups vs Redis Pub/Sub**
+
+Redis pub/sub has no concept of offset — a subscriber only gets messages published while it's connected. Kafka fixes that with consumer groups:
+
+- Each service subscribes as its own consumer group (e.g. `analytics-service`, `notification-service`)
+- Kafka tracks the offset (read position) per consumer group independently, stored in Kafka itself
+- Every consumer group gets its own full copy of every message on the topic, each at its own pace
+
+```
+Order Service publishes: OrderCreated → Kafka topic: order-events
+
+  Consumer group "analytics-service"     → offset 1042
+  Consumer group "notification-service"  → offset 1042
+```
+
+If Analytics Service goes down for 2 minutes, it resumes from its last committed offset when it comes back — no messages lost, no need to replay from Notification Service's position.
+
+What this buys you over Redis pub/sub:
+
+1. **Persistence** — messages are stored on disk, not lost if a consumer is offline
+2. **Consumer groups** — multiple independent consumers each get every message, at their own offset
+3. **Replay** — rewind a consumer group's offset to reprocess historical messages (critical for fintech audits)
+
+---
