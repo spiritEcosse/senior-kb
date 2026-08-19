@@ -99,6 +99,15 @@ PostgreSQL row changes (Debezium CDC)
           → Elasticsearch
 # If ES goes down: logs accumulate in Kafka, replay when it recovers
 
+# High-frequency market data — high throughput, built for exactly this
+Exchange price ticks (thousands/sec per symbol)
+  → Kafka topic: market-data.{symbol}
+      → Consumer 1: order book / pricing engine
+      → Consumer 2: real-time charting service
+      → Consumer 3: archive to cold storage for backtesting
+# Sequential disk writes + partitioning per symbol → millions of msg/sec,
+# no consumer competes with another for the same tick
+
 # Fraud detection — sliding window over a stream
 Payment events
   → Kafka
