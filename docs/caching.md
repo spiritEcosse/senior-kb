@@ -187,11 +187,61 @@ Sorted Set: score = timestamp. Precise sliding window, but O(log N) and more mem
 
 **Token Bucket (flexible burst):**
 
+Bucket holds tokens (max = capacity). Each request takes a token; tokens refill over time. Empty bucket → reject. Handles bursts more fairly than fixed window, which is why it's preferred for fintech.
+
+Naive `GET` then `SET` from Python has a race condition between concurrent requests — wrap the read-check-write in a Lua script so it runs as a single atomic op on the Redis server:
+
 ```python
-# User gets 100 tokens, refilled at 1.67/sec
-# Burst allowed up to bucket size
-# No boundary problem
+import redis
+import functools
+
+class TokenBucketLimiter:
+    LUA_SCRIPT = """
+    local tokens = tonumber(redis.call('GET', KEYS[1]) or ARGV[1])
+    if tokens > 0 then
+        redis.call('SET', KEYS[1], tokens - 1)
+        redis.call('EXPIRE', KEYS[1], ARGV[2])
+        return 1
+    else
+        return 0
+    end
+    """
+
+    def __init__(self, redis_client: redis.Redis, capacity: int = 100, window: int = 60):
+        self.redis = redis_client
+        self.capacity = capacity
+        self.window = window
+        # register once — compiles the script server-side and caches its SHA;
+        # subsequent calls send EVALSHA instead of the full script text
+        self.script = self.redis.register_script(self.LUA_SCRIPT)
+
+    def allow(self, key: str) -> bool:
+        result = self.script(keys=[key], args=[self.capacity, self.window])
+        return bool(result)
+
+
+limiter = TokenBucketLimiter(redis.Redis(host="localhost", port=6379, db=0))
+
+
+def rate_limited(limiter: TokenBucketLimiter, key_func):
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            key = key_func(*args, **kwargs)
+            if not limiter.allow(key):
+                raise RateLimitExceeded(key)
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+@rate_limited(limiter, key_func=lambda user_id, *a, **kw: f"rate_limit:{user_id}")
+def call_external_api(user_id: str, *args, **kwargs):
+    ...
 ```
+
+- Keying strategy: `rate_limit:{user_id}` (global) or `rate_limit:{api_name}:{user_id}` (per-endpoint).
+- Production pitfall: `register_script` returns a `Script` object tied to the connection at creation time. With a connection pool and failover, some client wrappers need re-registration after a reconnect, or calls raise `NOSCRIPT`.
 
 ---
 
