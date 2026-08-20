@@ -8,6 +8,7 @@ Structure: short answer (for quick recall) → detailed explanation.
 ## Sections
 
 - [Python Core](python-core.md)
+- [Numeric and Primitive Data Types](data-types.md)
 - [OOP](oop.md)
 - [Concurrency and Async](concurrency.md)
 - [Threading vs asyncio vs Multiprocessing](threading.md)
