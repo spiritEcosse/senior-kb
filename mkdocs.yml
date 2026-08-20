@@ -45,6 +45,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Python Core: python-core.md
+  - Numeric & Primitive Data Types: data-types.md
   - OOP: oop.md
   - Concurrency & Async: concurrency.md
   - Threading vs asyncio vs Multiprocessing: threading.md

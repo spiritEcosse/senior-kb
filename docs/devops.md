@@ -167,6 +167,38 @@ docker compose down -v        # stop + remove volumes
 
 ---
 
+### Docker Networking: how containers see each other
+
+**Do two containers need to be on the same network to talk to each other?** Yes. Containers on different Docker networks are isolated from each other by default — same as two machines on different physical networks with no route between them.
+
+**Do they see each other "by ports"?** No — `-p`/`ports:` only publishes a port to the **host** (outside world → container). Container-to-container traffic never goes through the published host port at all; it goes directly over the internal Docker network to the container's port. That's why in the Compose example above, `db` (Postgres) has **no** `ports:` entry, yet `web` still reaches it at `db:5432` — only `redis` publishes `6379:6379`, and that's solely so something on the *host* (e.g. `redis-cli` run locally) can reach it, not because `web` needs it.
+
+```
+Host machine                  Docker network "myproject_default"
+─────────────                 ───────────────────────────────────
+localhost:8000  ──published──→  container "web":8000
+                                  │
+                                  │  internal traffic — no host port involved
+                                  ▼
+                                 container "db":5432   (no -p needed)
+```
+
+**What actually makes containers reachable by name:**
+- Docker Compose creates one **user-defined bridge network** per project automatically and attaches every service in the file to it — so `web` can resolve the hostname `db` via Docker's embedded DNS, entirely inside that network.
+- Plain `docker run` containers with no `--network` flag land on the default `bridge` network instead — they *can* reach each other, but only by IP, because the legacy default bridge has no DNS-based name resolution. Fix: create a user-defined network yourself.
+
+```bash
+docker network create mynet
+docker run --network mynet --name db postgres:16
+docker run --network mynet --name web myapp
+# from inside 'web': `ping db` resolves — DNS works because it's a user-defined network
+```
+
+- `docker network ls` / `docker network inspect mynet` — list networks / see which containers are attached.
+- A container can be on multiple networks (`docker network connect othernet web`) — useful for a reverse proxy that needs to reach containers in separate projects.
+
+---
+
 ### Kubernetes
 
 **Core concepts:**

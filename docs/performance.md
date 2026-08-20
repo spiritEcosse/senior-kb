@@ -119,6 +119,16 @@ result = "".join(parts)
 
 ---
 
+### CPython's own JIT (PEP 744)
+
+Separate from PyPy's tracing JIT and Numba's LLVM JIT — this is a JIT built directly into CPython itself. Introduced experimentally (opt-in build flag) starting with Python 3.13, continuing to mature into 3.14. Uses a "copy-and-patch" approach: at build time, template machine code is generated for each bytecode instruction; at runtime, hot code paths get those templates stitched together and specialized, without a separate compilation pass like Numba/LLVM.
+
+- Optimizes *while the program runs* (hot loops get compiled after they've executed enough times), not ahead-of-time.
+- Distinct from `@lru_cache`-style caching or the "specializing adaptive interpreter" work from 3.11+ (PEP 659), which speeds up the bytecode interpreter itself without generating machine code — the JIT is the next step past that.
+- Not a drop-in replacement for Numba/PyPy on tight numerical loops yet — those remain the better choice when raw numeric throughput is the goal.
+
+---
+
 ### When Python speed is good enough
 
 CPython is fast enough for:

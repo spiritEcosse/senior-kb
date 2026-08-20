@@ -48,6 +48,41 @@ Beyond reference counting — cyclic GC (`gc` module) to detect circular referen
 
 ---
 
+### Stack vs Heap
+
+Python doesn't expose a manual stack/heap split like C — but the interpreter still uses both:
+
+- **Call stack** — one **frame object** per function call in progress: local variable *references*, the instruction pointer, and a link to the caller's frame. Popped when the function returns. `RecursionError` = stack of frames grew past `sys.getrecursionlimit()`.
+- **Heap** — every Python **object** lives here: ints, strings, lists, dicts, class instances — *and function objects themselves*, since functions are first-class objects (`def` and `lambda` both create a heap-allocated `function` object with a `__code__`, `__globals__`, `__closure__`, etc.).
+
+So a local variable name in a frame is just a reference (pointer) into the heap — the frame never stores the object's data itself:
+
+```python
+def outer():
+    x = [1, 2, 3]     # 'x' in outer's frame is a reference; the list lives on the heap
+    def inner():
+        return x       # inner's __closure__ holds a *cell* — a heap object — pointing at the same list
+    return inner
+
+f = outer()   # outer's frame is popped/destroyed, but the list survives —
+              # the closure's cell object still holds a reference to it
+f()           # [1, 2, 3]
+```
+
+**Can you store a function on the heap?** Yes — trivially, because that's the only place a function object *can* live. Assigning it to a variable, putting it in a list/dict, or returning it from another function is just adding another reference to the same heap object:
+
+```python
+functions_registry = {}
+
+def add(x, y): return x + y
+
+functions_registry['add'] = add   # heap object 'add', now referenced from a dict — also on the heap
+```
+
+Connections between heap objects are just references: a `function` object's `__closure__` is a tuple of `cell` objects, each `cell` holds a reference to a captured variable's value (also on the heap); a class instance's `__dict__` holds references to its attributes; a list's internal array holds references to its elements. The reference-counting GC (see above) walks exactly this graph of heap-to-heap pointers to know when something can be freed.
+
+---
+
 ### Generators, Iterators, Iterables
 
 - Iterable — implements `__iter__` (list, dict, str, set, range...)
@@ -532,6 +567,25 @@ class Registry(type):
 **Key distinction:** In a regular class `__init__` receives `self` (an instance). In a metaclass `__init__` receives `cls` (a class) — because classes are instances of their metaclass.
 
 Use cases: ORM (Django Models), API frameworks, class validation, auto-registration.
+
+**Real-world example — `typing.NamedTuple`:**
+
+You don't write your own metaclass to get this behaviour — `NamedTuple` already uses one (`NamedTupleMeta`) that intercepts class creation, reads the class body's annotations, and synthesizes a `collections.namedtuple`-based class out of them:
+
+```python
+from typing import NamedTuple
+
+class Point(NamedTuple):
+    x: int
+    y: int = 0          # default value
+
+p = Point(1, 2)
+p.x, p.y            # 1, 2 — tuple-like, but with named field access
+p._asdict()         # {'x': 1, 'y': 2}
+isinstance(p, tuple) # True — it's a real tuple subclass under the hood
+```
+
+The metaclass is what turns `x: int` / `y: int = 0` (plain annotated class attributes) into constructor parameters, `__slots__`-free named fields, and a generated `__new__` — the same mechanism Django's `ModelBase` metaclass uses to turn `name = models.CharField(...)` class attributes into ORM fields.
 
 ---
 
