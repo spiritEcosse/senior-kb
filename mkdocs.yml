@@ -54,6 +54,7 @@ nav:
   - Queues & Tasks: queues.md
   - Architecture: architecture.md
   - Django Internals: django.md
+  - Django REST Framework: drf.md
   - Testing: testing.md
   - Security: security.md
   - System Programming: system.md
