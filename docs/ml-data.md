@@ -399,6 +399,72 @@ result = df[df['value'] > 0].groupby('category')['value'].sum().compute()
 
 ---
 
+### Worked example: parsing raw text rows into insights
+
+A common interview/take-home shape: you're handed a list of raw delimited strings (no real CSV file) and asked to derive a few aggregate stats — average rating, most frequent word (excluding stop words), most frequent month. It exercises `pd.read_csv` on an in-memory buffer, `str` vectorised ops, `Counter`, and `pd.to_datetime`.
+
+```python
+import pandas as pd
+from io import StringIO
+from collections import Counter
+import re
+import calendar
+
+data_list = [
+    "1,4,Great product loved it,01 15 24",
+    "2,5,Amazing quality great value,02 20 24",
+    "3,3,Okay not great,01 05 24",
+    "4,5,Loved the product amazing,03 10 24",
+]
+
+stop_words = set([
+    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
+    'for', 'of', 'with', 'it', 'is', 'was', 'not', 'okay'
+])
+
+def analyze(data_list, stop_words):
+    # StringIO lets read_csv treat an in-memory string like a file
+    csv_text = "\n".join(data_list)
+    df = pd.read_csv(
+        StringIO(csv_text),
+        header=None,
+        names=["id", "rating", "comment", "date"],
+        skipinitialspace=True,
+    )
+
+    # 1. Average rating
+    avg_rating = df["rating"].mean()
+
+    # 2. Most common word — vectorised lowercase via .str, then tokenize + filter
+    all_text = " ".join(df["comment"].str.lower())
+    words = [w for w in re.findall(r"[a-z]+", all_text) if w not in stop_words]
+    most_common_word, _ = Counter(words).most_common(1)[0]
+
+    # 3. Most common month, as a name — parse with an explicit format, then map
+    df["date_parsed"] = pd.to_datetime(df["date"], format="%m %d %y")
+    most_common_month_num, _ = Counter(df["date_parsed"].dt.month).most_common(1)[0]
+    most_common_month = calendar.month_name[most_common_month_num]
+
+    return [avg_rating, most_common_word, most_common_month]
+
+result = analyze(data_list, stop_words)
+# avg_rating: 4.25, most_common_word: 'great', most_common_month: 'January'
+```
+
+**Notes:**
+
+- `StringIO` avoids writing a temp file just to hand text to `pd.read_csv` — useful for tests and for data that arrives as strings (API responses, in-memory logs).
+- `pd.to_datetime(..., format=...)` — always pass an explicit `format` when you know it; letting pandas infer the format is slower and can silently misparse ambiguous dates (`01 02 24` → Jan 2 or Feb 1?).
+- `df["date_parsed"].dt.month` returns ints; `calendar.month_name[n]` converts to the name without a manual lookup dict.
+- `Counter(...).most_common(1)[0]` is a plain-Python idiom here rather than `.value_counts().idxmax()` — both work; `value_counts()` is the more "pandas-native" choice when you're already inside a DataFrame:
+
+```python
+most_common_word = pd.Series(words).value_counts().idxmax()
+most_common_month = df["date_parsed"].dt.month_name().value_counts().idxmax()
+```
+
+---
+
 ---
 
 ## Pandas — Advanced
