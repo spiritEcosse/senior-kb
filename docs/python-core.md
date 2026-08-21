@@ -370,6 +370,42 @@ Callable[[int, str], bool]
 Protocol                # structural interface (duck typing + static check)
 ```
 
+---
+
+### from __future__ import annotations (PEP 563)
+
+Normally Python evaluates every annotation **at definition time** — when the `def`/`class` statement runs, it looks up the actual objects (`list`, `User`, ...) and stores them in `__annotations__`.
+
+```python
+def process(items: list[User]) -> dict[str, int]:   # User looked up right now
+    ...
+```
+
+If `User` isn't defined yet (forward reference) or refers to the enclosing class itself, this raises `NameError` at import time — unless you quote it manually (`items: 'list[User]'`).
+
+`from __future__ import annotations` changes the evaluation model: the compiler stores each annotation's **source text as a string**, and never evaluates it at all unless something explicitly asks for the resolved type.
+
+```python
+from __future__ import annotations   # must be the first import in the file
+
+class Node:
+    # 'Node' below is a forward reference to the class currently being defined —
+    # would be a NameError without the future import
+    def add_child(self, child: Node) -> None: ...
+
+def process(items: list[User]) -> dict[str, int]:
+    ...
+
+print(process.__annotations__)
+# {'items': 'list[User]', 'return': 'dict[str, int]'}   — strings, not objects
+```
+
+Consequences:
+
+- **Forward references work for free** — no quoting needed, including self-references and circular references between two classes in the same module.
+- **Zero evaluation cost at import** — nothing is looked up until something explicitly resolves the strings via `typing.get_type_hints()`.
+- **Runtime behavior is unaffected either way** — Python never enforces annotations at call time, future import or not (see below).
+
 #### TypeVar and Generic
 
 `TypeVar` declares a placeholder type that gets resolved at call time. `Generic[T]` makes a class parametric over that placeholder.
@@ -750,14 +786,7 @@ print(add.__annotations__)  # {'x': <class 'int'>, 'y': <class 'int'>, 'return':
 **Runtime cost is negligible:**
 - Annotations are parsed once at module import and stored as strings (with `from __future__ import annotations`) or as evaluated objects
 - No checking happens on each function call
-- `from __future__ import annotations` (PEP 563) defers evaluation → annotations stored as strings → zero evaluation cost
-
-```python
-from __future__ import annotations   # all annotations become strings, never evaluated
-
-def process(items: list[User]) -> dict[str, int]:  # 'list[User]' stored as string
-    ...
-```
+- See [`from __future__ import annotations` (PEP 563)](#from-future-import-annotations-pep-563) above for how deferred evaluation works and why it's essentially free.
 
 **Do type hints affect `__pycache__` / bytecode?**
 
