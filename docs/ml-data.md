@@ -463,6 +463,54 @@ most_common_word = pd.Series(words).value_counts().idxmax()
 most_common_month = df["date_parsed"].dt.month_name().value_counts().idxmax()
 ```
 
+#### Extending it: dropping rows with missing required fields
+
+Real input has holes — a trailing comma with nothing after it, like row 5 below. The natural instinct is to pass something like `dropna=True` straight into `pd.read_csv`, but that's not a real parameter — `read_csv` will raise `TypeError: read_csv() got an unexpected keyword argument 'dropna'` before it ever reads a row. Validation happens on the DataFrame *after* parsing, not as a read_csv option:
+
+```python
+data_list = [
+    "1,4,Great product loved it,01 15 24",
+    "2,5,Amazing quality great value,02 20 24",
+    "3,3,Okay not great,01 05 24",
+    "4,5,Loved the product amazing,03 10 24",
+    "5,4,Good product but expensive,",   # trailing comma -> empty date
+]
+
+required = ["rating", "comment", "date"]
+
+def analyze_with_validation(data_list, stop_words, required=required):
+    csv_text = "\n".join(data_list)
+    df = pd.read_csv(
+        StringIO(csv_text),
+        header=None,
+        names=["id", "rating", "comment", "date"],
+        skipinitialspace=True,
+    )
+
+    # read_csv already turns a bare trailing comma into NaN, so
+    # dropna(subset=...) is all the empty-field check needs.
+    df = df.dropna(subset=required)
+
+    avg_rating = df["rating"].mean()
+    all_text = " ".join(df["comment"].str.lower())
+    words = [w for w in re.findall(r"[a-z]+", all_text) if w not in stop_words]
+    most_common_word, _ = Counter(words).most_common(1)[0]
+
+    df["date_parsed"] = pd.to_datetime(df["date"], format="%m %d %y")
+    most_common_month_num, _ = Counter(df["date_parsed"].dt.month).most_common(1)[0]
+    most_common_month = calendar.month_name[most_common_month_num]
+
+    return [avg_rating, most_common_word, most_common_month]
+
+# row 5 dropped for missing date -> [4.25, 'great', 'January']
+```
+
+**Notes:**
+
+- `pd.read_csv` has no `dropna` (or `skip_blank_lines`-for-fields) option — it only knows how to skip fully blank *lines*. Field-level "is this required column populated" validation is a DataFrame operation, done after the read.
+- `read_csv` already converts an empty field (`,,`) to `NaN` on parse, so `df.replace("", pd.NA)` is redundant for CSV-sourced data — it only matters if the DataFrame came from somewhere that keeps empty fields as literal `""` (e.g. `.astype(str)` output, JSON, manual construction).
+- Be careful with a blanket `df.replace({0: pd.NA})` to catch a "missing" rating of `0`: it rewrites *every* `0` in the DataFrame, not just the rating column. Target the column explicitly instead: `df.loc[df["rating"] == 0, "rating"] = pd.NA`.
+
 ---
 
 ---
