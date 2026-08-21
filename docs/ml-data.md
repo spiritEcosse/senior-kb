@@ -401,7 +401,9 @@ result = df[df['value'] > 0].groupby('category')['value'].sum().compute()
 
 ### Worked example: parsing raw text rows into insights
 
-A common interview/take-home shape: you're handed a list of raw delimited strings (no real CSV file) and asked to derive a few aggregate stats — average rating, most frequent word (excluding stop words), most frequent month. It exercises `pd.read_csv` on an in-memory buffer, `str` vectorised ops, `Counter`, and `pd.to_datetime`.
+A common interview/take-home shape: you're handed a list of raw delimited strings (no real CSV file) and asked to derive a few aggregate stats — average rating, most frequent word (excluding stop words), most frequent month. It exercises `pd.read_csv` on an in-memory buffer, `str` vectorised ops, `Counter`, `pd.to_datetime`, and validating required fields.
+
+Real input has holes — row 5 below has a trailing comma with nothing after it. The natural instinct is to pass something like `dropna=True` straight into `pd.read_csv`, but that's not a real parameter — `read_csv` will raise `TypeError: read_csv() got an unexpected keyword argument 'dropna'` before it ever reads a row. Validation happens on the DataFrame *after* parsing, via `dropna(subset=...)`:
 
 ```python
 import pandas as pd
@@ -415,6 +417,7 @@ data_list = [
     "2,5,Amazing quality great value,02 20 24",
     "3,3,Okay not great,01 05 24",
     "4,5,Loved the product amazing,03 10 24",
+    "5,4,Good product but expensive,",   # trailing comma -> empty date
 ]
 
 stop_words = set([
@@ -422,7 +425,9 @@ stop_words = set([
     'for', 'of', 'with', 'it', 'is', 'was', 'not', 'okay'
 ])
 
-def analyze(data_list, stop_words):
+required = ["rating", "comment", "date"]
+
+def analyze(data_list, stop_words, required=required):
     # StringIO lets read_csv treat an in-memory string like a file
     csv_text = "\n".join(data_list)
     df = pd.read_csv(
@@ -431,6 +436,10 @@ def analyze(data_list, stop_words):
         names=["id", "rating", "comment", "date"],
         skipinitialspace=True,
     )
+
+    # read_csv already turns a bare trailing comma into NaN, so
+    # dropna(subset=...) is all the empty-field check needs.
+    df = df.dropna(subset=required)
 
     # 1. Average rating
     avg_rating = df["rating"].mean()
@@ -448,12 +457,15 @@ def analyze(data_list, stop_words):
     return [avg_rating, most_common_word, most_common_month]
 
 result = analyze(data_list, stop_words)
-# avg_rating: 4.25, most_common_word: 'great', most_common_month: 'January'
+# row 5 dropped for missing date -> avg_rating: 4.25, most_common_word: 'great', most_common_month: 'January'
 ```
 
 **Notes:**
 
 - `StringIO` avoids writing a temp file just to hand text to `pd.read_csv` — useful for tests and for data that arrives as strings (API responses, in-memory logs).
+- `pd.read_csv` has no `dropna` (or `skip_blank_lines`-for-fields) option — it only knows how to skip fully blank *lines*. Field-level "is this required column populated" validation is a DataFrame operation, done after the read, not a read_csv option.
+- `read_csv` already converts an empty field (`,,`) to `NaN` on parse, so `df.replace("", pd.NA)` before `dropna` is redundant for CSV-sourced data — it only matters if the DataFrame came from somewhere that keeps empty fields as literal `""` (e.g. `.astype(str)` output, JSON, manual construction).
+- If a numeric "missing" sentinel like a rating of `0` also needs to count as invalid, avoid a blanket `df.replace({0: pd.NA})` — it rewrites *every* `0` in the DataFrame, not just the rating column. Target the column explicitly: `df.loc[df["rating"] == 0, "rating"] = pd.NA` before the `dropna`.
 - `pd.to_datetime(..., format=...)` — always pass an explicit `format` when you know it; letting pandas infer the format is slower and can silently misparse ambiguous dates (`01 02 24` → Jan 2 or Feb 1?).
 - `df["date_parsed"].dt.month` returns ints; `calendar.month_name[n]` converts to the name without a manual lookup dict.
 - `Counter(...).most_common(1)[0]` is a plain-Python idiom here rather than `.value_counts().idxmax()` — both work; `value_counts()` is the more "pandas-native" choice when you're already inside a DataFrame:
