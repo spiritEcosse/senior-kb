@@ -119,6 +119,25 @@ result = "".join(parts)
 
 ---
 
+### PyPy vs CPython
+
+| | CPython | PyPy |
+|---|---|---|
+| Execution model | Bytecode interpreted directly (+ optional JIT since 3.13, see below) | Tracing JIT — detects hot loops, compiles them to machine code at runtime |
+| Reference implementation | Yes — the "standard" Python, what `python3` almost always is | Alternative implementation, itself written in RPython |
+| Speed | Baseline | 3–10× faster on long-running, loop-heavy pure-Python code |
+| Startup time | Fast (~10s of ms) | Slower — JIT warm-up cost before it gets fast |
+| Memory usage | Lower baseline | Higher — JIT-compiled code and trace data cost memory |
+| C extension compatibility | Native — CPython's C API is the reference | Partial, via `cpyext` compatibility shim; C extensions using CPython internals directly (rather than the stable ABI) may not work or run slower than native |
+| GIL | Yes | Yes (PyPy has its own GIL too — it doesn't remove the GIL, it's a separate implementation of the same single-threaded-bytecode-execution constraint) |
+| Best for | Anything using NumPy/pandas/Django/etc. — the ecosystem is built against CPython | Long-running, CPU-bound pure-Python programs with hot loops and few C-extension dependencies |
+
+**Why the speedup isn't universal:** the JIT only pays off once a loop has run enough iterations to be flagged "hot" and get compiled — short scripts or code where every line only runs once or twice stay interpreter-speed, minus the added warm-up cost. It's also a genuinely separate interpreter — bugs, edge-case semantics, and library support can differ from CPython, which is why most production deployments default to CPython unless a specific hot loop justifies switching.
+
+**In short:** PyPy is a drop-in *interpreter* replacement (same language, different execution engine) — not a compiler like Cython, and not a library like NumPy. Reach for it when profiling shows the bottleneck is pure-Python loops CPython can't vectorise away, and the app doesn't lean hard on C-extension internals.
+
+---
+
 ### CPython's own JIT (PEP 744)
 
 Separate from PyPy's tracing JIT and Numba's LLVM JIT — this is a JIT built directly into CPython itself. Introduced experimentally (opt-in build flag) starting with Python 3.13, continuing to mature into 3.14. Uses a "copy-and-patch" approach: at build time, template machine code is generated for each bytecode instruction; at runtime, hot code paths get those templates stitched together and specialized, without a separate compilation pass like Numba/LLVM.
