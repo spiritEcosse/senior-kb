@@ -12,9 +12,163 @@ Stateful: server stores session; harder to scale.
 
 ### GraphQL
 
-Client requests exactly the fields it needs. Single endpoint. Strict schema typing.
-Pros: no over/under-fetching, introspection (GraphiQL).
-Cons: harder HTTP caching, N+1 (→ DataLoader), harder monitoring.
+Client requests exactly the fields it needs. Single endpoint (usually `POST /graphql`). Strict schema typing.
+Pros: no over/under-fetching, introspection (GraphiQL/GraphQL Playground), one round trip for nested/related data.
+Cons: harder HTTP caching (single endpoint, `POST`-based), N+1 (→ DataLoader), harder monitoring/rate-limiting per-field cost, file uploads need extensions.
+
+**Schema — types, queries, mutations, subscriptions:**
+
+```graphql
+type User {
+  id: ID!
+  name: String!
+  email: String!
+  orders: [Order!]!          # nested/related field — resolved separately
+}
+
+type Order {
+  id: ID!
+  total: Float!
+  status: OrderStatus!
+}
+
+enum OrderStatus { PENDING SHIPPED DELIVERED }
+
+type Query {
+  user(id: ID!): User
+  users(first: Int, after: String): UserConnection!
+}
+
+type Mutation {
+  createOrder(userId: ID!, productId: ID!, qty: Int!): Order!
+}
+
+type Subscription {
+  orderStatusChanged(orderId: ID!): Order!    # WebSocket, real-time push
+}
+```
+
+```graphql
+# Client sends exactly what it needs — no more, no less
+query {
+  user(id: "42") {
+    name
+    orders { id total status }
+  }
+}
+
+mutation {
+  createOrder(userId: "42", productId: "7", qty: 2) {
+    id
+    status
+  }
+}
+```
+
+**Resolvers** — one function per field; GraphQL walks the query tree and calls a resolver for each requested field:
+
+```python
+# Python, Strawberry
+import strawberry
+
+@strawberry.type
+class Order:
+    id: strawberry.ID
+    total: float
+
+@strawberry.type
+class User:
+    id: strawberry.ID
+    name: str
+
+    @strawberry.field
+    def orders(self) -> list[Order]:
+        return order_repo.get_by_user(self.id)   # runs once PER user in the result set
+
+@strawberry.type
+class Query:
+    @strawberry.field
+    def user(self, id: strawberry.ID) -> User | None:
+        return user_repo.get(id)
+```
+
+**N+1 problem and DataLoader:**
+
+Requesting `users { orders { ... } }` for 100 users naively fires 1 query for users + 100 queries for orders (one per resolver call). `DataLoader` batches and caches those per-request:
+
+```python
+from strawberry.dataloader import DataLoader
+
+async def batch_load_orders(user_ids: list[int]) -> list[list[Order]]:
+    # ONE query for all requested users, then group in memory
+    orders = await Order.objects.filter(user_id__in=user_ids)
+    by_user = defaultdict(list)
+    for o in orders:
+        by_user[o.user_id].append(o)
+    return [by_user[uid] for uid in user_ids]   # must match input order
+
+order_loader = DataLoader(load_fn=batch_load_orders)
+
+@strawberry.type
+class User:
+    id: strawberry.ID
+
+    @strawberry.field
+    async def orders(self) -> list[Order]:
+        return await order_loader.load(self.id)   # queued, batched, deduped
+```
+
+DataLoader collects all `.load()` calls within one tick of the event loop, then issues a single batched call — turns N+1 into 2 queries. Scope one `DataLoader` instance per request (never share/cache across requests — stale/leaked data).
+
+**REST vs GraphQL:**
+
+| | REST | GraphQL |
+|---|---|---|
+| Endpoints | Many (one per resource) | One |
+| Fetching | Fixed shape — over/under-fetching | Client picks exact fields |
+| Versioning | `/v1/`, `/v2/` | Evolve schema — deprecate fields instead |
+| HTTP caching | Native (GET + URL as cache key) | Needs app-level caching (Apollo cache, persisted queries) |
+| Status codes | 200/400/404/500 | Usually 200, errors in body `errors[]` |
+| File upload | Native (multipart) | Needs `graphql-multipart-request-spec` extension |
+| Learning curve | Low | Higher (schema, resolvers, N+1) |
+
+**Pagination — Relay cursor connections** (the GraphQL-standard shape):
+
+```graphql
+type UserConnection {
+  edges: [UserEdge!]!
+  pageInfo: PageInfo!
+}
+
+type UserEdge {
+  cursor: String!
+  node: User!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+```
+
+```graphql
+query {
+  users(first: 20, after: "cursor123") {
+    edges { cursor node { id name } }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+**Security — a GraphQL query is arbitrary client-defined workload, so guard it explicitly:**
+
+- **Query depth limiting** — reject deeply nested queries (`user { orders { user { orders { ... } } } }`) that could recurse expensively.
+- **Query complexity/cost analysis** — assign a cost per field, reject queries above a budget (protects against a single request fanning out into thousands of resolver calls).
+- **Disable introspection in production** — schema introspection (`__schema`, `__type`) is invaluable in dev (powers GraphiQL) but hands attackers your full API surface.
+- **Persisted queries** — client sends a hash instead of the full query string; server only executes pre-registered queries. Cuts payload size and closes off arbitrary ad-hoc queries.
+- **Per-field authorization** — REST checks auth at the endpoint; GraphQL needs it per-resolver/per-field, since one query can touch many types with different access rules.
+
+**Python ecosystem:** Strawberry and Graphene (standalone or `strawberry-django` / `graphene-django` for Django model integration); FastAPI commonly pairs with Strawberry.
 
 ### JWT (JSON Web Token)
 
