@@ -92,6 +92,59 @@ class Query:
         return user_repo.get(id)
 ```
 
+**Resolver arguments:**
+
+Strawberry maps Python function parameters (after `self`) straight to GraphQL field arguments — types, defaults, and optional/`None` values carry over into the schema automatically:
+
+```python
+@strawberry.type
+class Query:
+    @strawberry.field
+    def users(
+        self,
+        status: OrderStatus | None = None,   # optional param -> nullable arg in schema
+        first: int = 20,                      # default value -> optional arg in schema
+    ) -> list[User]:
+        qs = user_repo.all()
+        if status:
+            qs = qs.filter(status=status)
+        return qs[:first]
+```
+
+```graphql
+type Query {
+  users(status: OrderStatus, first: Int! = 20): [User!]!
+}
+```
+
+```graphql
+query { users(status: SHIPPED, first: 5) { id name } }
+```
+
+Arguments work the same on a nested field resolver — `User.orders` can filter/paginate independently of the parent query, using `self` for the parent object plus its own declared args:
+
+```python
+@strawberry.type
+class User:
+    id: strawberry.ID
+
+    @strawberry.field
+    def orders(self, status: OrderStatus | None = None) -> list[Order]:
+        orders = order_repo.get_by_user(self.id)
+        return [o for o in orders if status is None or o.status == status]
+```
+
+For request-scoped data (current user, DB session, DataLoader instances) that isn't a GraphQL argument, Strawberry injects `info: strawberry.Info` — declare it as a parameter and it's passed automatically, never exposed in the schema:
+
+```python
+@strawberry.type
+class Query:
+    @strawberry.field
+    def me(self, info: strawberry.Info) -> User:
+        request = info.context["request"]
+        return user_repo.get(request.user.id)
+```
+
 **N+1 problem and DataLoader:**
 
 Requesting `users { orders { ... } }` for 100 users naively fires 1 query for users + 100 queries for orders (one per resolver call). `DataLoader` batches and caches those per-request:
@@ -106,19 +159,28 @@ async def batch_load_orders(user_ids: list[int]) -> list[list[Order]]:
     for o in orders:
         by_user[o.user_id].append(o)
     return [by_user[uid] for uid in user_ids]   # must match input order
+```
 
-order_loader = DataLoader(load_fn=batch_load_orders)
+**Plugging it into the same setup:** a loader must be created fresh per request (its cache lives only as long as one request) — never as a module-level global, or one client's cached result leaks into another's. Build it in the context getter and pull it back out via `info` in the resolver, the same injection mechanism used for `me` above:
+
+```python
+# context.py — one DataLoader instance per incoming request
+async def get_context() -> dict:
+    return {"order_loader": DataLoader(load_fn=batch_load_orders)}
+
+schema = strawberry.Schema(query=Query)
+graphql_app = GraphQLRouter(schema, context_getter=get_context)   # FastAPI
 
 @strawberry.type
 class User:
     id: strawberry.ID
 
     @strawberry.field
-    async def orders(self) -> list[Order]:
-        return await order_loader.load(self.id)   # queued, batched, deduped
+    async def orders(self, info: strawberry.Info) -> list[Order]:
+        return await info.context["order_loader"].load(self.id)   # queued, batched, deduped
 ```
 
-DataLoader collects all `.load()` calls within one tick of the event loop, then issues a single batched call — turns N+1 into 2 queries. Scope one `DataLoader` instance per request (never share/cache across requests — stale/leaked data).
+DataLoader collects all `.load()` calls within one tick of the event loop, then issues a single batched call — turns N+1 into 2 queries. Because the loader is request-scoped, its internal cache also dedupes repeated `.load(42)` calls for the same request without a second trip to the DB.
 
 **REST vs GraphQL:**
 
