@@ -49,6 +49,7 @@ nav:
   - OOP: oop.md
   - Concurrency & Async: concurrency.md
   - Threading vs asyncio vs Multiprocessing: threading.md
+  - Async Across Languages (JS, Rust, Go, C++): async-languages.md
   - Databases: databases.md
   - Web & API: web-api.md
   - Caching: caching.md
