@@ -199,7 +199,7 @@ cppcoro::task<std::vector<int>> fetch_all(std::vector<std::string> urls) {
 }
 ```
 
-C++26 adds `std::execution` (senders/receivers, ex-P2300), which finally gives the standard library a composition model. Until then, "async C++" means picking one of Asio, libunifex, cppcoro, folly::coro or stdexec — they do not interoperate.
+The **P2300** proposal (`std::execution`, senders/receivers) finally gives the standard library a composition model — see [the section below](#c-the-p2300-proposal-stdexecution). Until implementations catch up, "async C++" means picking one of Asio, libunifex, cppcoro, folly::coro or stdexec — they do not interoperate.
 
 ---
 
@@ -290,7 +290,7 @@ Microtasks (promises) drain **completely** before the next macrotask (timers, I/
 
 **Rust** — you choose. `#[tokio::main]` gives a multi-thread work-stealing runtime; `#[tokio::main(flavor = "current_thread")]` gives a single-threaded one. Tasks are **not** pre-empted: a task that computes without awaiting blocks its worker thread. Use `tokio::task::spawn_blocking` for blocking/CPU work (separate, larger pool up to 512 threads by default) and `tokio::task::yield_now()` in long compute loops. `spawn` requires `Send + 'static`; `spawn_local` (with a `LocalSet`) does not.
 
-**C++** — there is no scheduler unless you supply one. `co_await` transfers control to whatever the awaiter's `await_suspend` decides; with Asio that's `io_context::run()` on however many threads you started.
+**C++** — there is no scheduler unless you supply one (P2300 standardises the *concept* of one, and P2079 adds a shared `parallel_scheduler`). `co_await` transfers control to whatever the awaiter's `await_suspend` decides; with Asio that's `io_context::run()` on however many threads you started.
 
 ```cpp
 // Asio: a thread pool draining one io_context
@@ -300,6 +300,162 @@ for (int i = 0; i < 4; ++i) pool.emplace_back([&]{ io.run(); });
 
 asio::co_spawn(io, handle_connection(std::move(sock)), asio::detached);
 ```
+
+---
+
+## C++: the P2300 proposal (`std::execution`)
+
+### What P2300 is
+
+**P2300 — "`std::execution`" — is a WG21 proposal paper**, not a library someone shipped and then standardised. It is the document that *specifies* an asynchronous programming model for the C++ standard library: the vocabulary types, the concepts they must satisfy, the algorithms, and the rules for customising them. It was adopted into the C++26 working draft (as revision R10).
+
+The paper's authors are Eric Niebler, Kirk Shoop, Lewis Baker, Michał Dominiak, Georgy Evtushenko, Lucian Radu Teodorescu, Lee Howes, Michael Garland and Bryce Adelstein Lelbach — a large share of them at **NVIDIA**, which is why the reference implementation lives at [NVIDIA/stdexec](https://github.com/NVIDIA/stdexec) and why the design is built to reach a GPU, not just a thread pool.
+
+The lineage: P0443 (the old "executors" proposal, ~5 years, never landed) → libunifex (Meta's experiment with lazy senders) → P2300. The earlier proposals tried to standardise *where work runs*; P2300 standardises *how asynchronous work is described and composed*, and makes "where" one property of that description.
+
+!!! note "Why a proposal matters here"
+    Everything in this section is a specification that implementations must match, so the same pipeline can run on `stdexec`, a vendor's standard library, an embedded executor, or a GPU backend. That is the whole point: before P2300, "async C++" meant picking Asio *or* libunifex *or* cppcoro *or* folly::coro, and code written against one could not be composed with another.
+
+### The four concepts
+
+| Concept | Role | Analogy |
+|---|---|---|
+| **scheduler** | a handle to an execution context; `schedule(sch)` returns a sender that completes *on* it | tokio `Runtime`, Go's `P` |
+| **sender** | a lazy *description* of async work, not the work itself | Rust `Future` |
+| **receiver** | the continuation — three channels: `set_value`, `set_error`, `set_stopped` | Rust `Waker` + the `Poll` result |
+| **operation_state** | what `connect(sender, receiver)` returns; the actual suspended state. Runs only when `start()`ed | Rust's pinned state machine |
+
+The three completion channels are the design's sharpest idea. A sender does not just "resolve or reject" — it completes in exactly one of three ways, and the set of possible completions is **part of the type**, computed at compile time as `completion_signatures`:
+
+```cpp
+// Reading roughly as: this sender either yields an int, fails with exception_ptr,
+// or reports that it was stopped.
+using sigs = completion_signatures<
+    set_value_t(int),
+    set_error_t(std::exception_ptr),
+    set_stopped_t()>;
+```
+
+Rust's `Future` has one output type and expresses cancellation by *not existing any more*; JavaScript has resolve/reject and no cancellation channel at all. `set_stopped` gives C++ a first-class "this was cancelled, and that is not an error" signal that composes through every algorithm.
+
+### A pipeline
+
+```cpp
+#include <stdexec/execution.hpp>
+#include <exec/static_thread_pool.hpp>
+
+namespace ex = stdexec;
+
+exec::static_thread_pool pool{8};
+ex::scheduler auto sch = pool.get_scheduler();
+
+ex::sender auto work =
+      ex::schedule(sch)                         // start on the pool
+    | ex::then([] { return load_rows(); })      // value channel: T -> U
+    | ex::let_value([](std::vector<Row>& rows) { // rows live in the operation state
+          return ex::just()
+               | ex::bulk(rows.size(), [&rows](std::size_t i) { transform(rows[i]); })
+               | ex::then([&rows] { return summarise(rows); });
+      })
+    | ex::upon_error([](std::exception_ptr) { return Summary::empty(); });
+
+auto [summary] = ex::sync_wait(std::move(work)).value();   // connect + start + block
+```
+
+Nothing above runs until `sync_wait` connects the sender to a receiver and starts the resulting operation state. Build the pipeline, throw it away, and no work happened — the same lazy contract as a Rust `Future`, and the opposite of a JavaScript Promise.
+
+Core algorithms:
+
+| Kind | Algorithms |
+|---|---|
+| Sources | `just`, `just_error`, `just_stopped`, `schedule`, `read_env` |
+| Value transforms | `then`, `let_value`, `bulk` |
+| Error / stop handling | `upon_error`, `upon_stopped`, `let_error`, `let_stopped`, `stopped_as_optional` |
+| Composition | `when_all`, `into_variant`, `split`, `starts_on`, `continues_on` |
+| Consumers | `sync_wait`, `start_detached` |
+
+`continues_on(sch)` (named `transfer` in earlier revisions) is the "hop to another context" operator — everything downstream of it completes on `sch`.
+
+### Structured concurrency without allocation
+
+This is what distinguishes P2300 from every other model on this page.
+
+`connect()` returns the operation state **by value**. The caller owns it, it is neither copyable nor movable, and it must outlive the operation — so the natural place for it is the enclosing operation state, which is itself a member of *its* parent. A whole pipeline collapses into one nested object whose lifetime is a scope, and the "no heap allocation required" property falls out of that.
+
+Compare:
+
+- **Rust**: `tokio::spawn` boxes the future and requires `Send + 'static`. `join!` avoids the box but the task still lives in the runtime's slab.
+- **C++20 coroutines alone**: each coroutine frame is a separate heap allocation (elidable in principle, rarely in practice across a library boundary).
+- **Go**: every goroutine gets a real stack, growable but never free.
+- **P2300**: one composite object, stack-allocatable, with the compiler able to see through the whole chain and inline it.
+
+The cost is that lifetimes become your problem: a sender that borrows must not outlive what it borrows, and `start_detached` (fire-and-forget) deliberately breaks the structure — which is why `async_scope` exists to give detached work an owner.
+
+### Cancellation
+
+Cancellation travels through the receiver's **environment** — a bag of queries attached to the receiver, reachable as `get_env(rcvr)`:
+
+```cpp
+auto token = ex::get_stop_token(ex::get_env(rcvr));
+if (token.stop_requested()) { ex::set_stopped(std::move(rcvr)); return; }
+token.stop_callback_for_t<Fn> cb{token, Fn{...}};   // wake the I/O, cancel the kernel
+```
+
+Algorithms forward the token down the chain automatically, so `when_all` cancelling its siblings, or a timeout stopping a whole subtree, is the same mechanism rather than three different ones. Completion then arrives on `set_stopped`, distinct from an error.
+
+| | Cancellation signal | Distinct from error? |
+|---|---|---|
+| Go | `ctx.Done()` channel, checked by hand | No — `ctx.Err()` is an error value |
+| Rust | drop the future | No signal at all |
+| Python | `CancelledError` raised at an await point | Yes (`BaseException`) |
+| JS | `AbortSignal` → `AbortError` rejection | No |
+| P2300 | stop token in, `set_stopped` out | **Yes, a separate channel** |
+
+### Coroutine interop
+
+P2300 does not replace C++20 coroutines — it is the layer they were missing. A sender is awaitable inside a coroutine, and a coroutine task is itself a sender:
+
+```cpp
+exec::task<int> handle(ex::scheduler auto sch) {
+    co_await ex::schedule(sch);                          // resume on the pool
+    auto [a, b] = co_await ex::when_all(fetch(1), fetch(2));
+    co_return a + b;
+}
+
+auto [n] = ex::sync_wait(handle(sch)).value();           // the task IS a sender
+```
+
+Use coroutines where sequencing reads better as straight-line code; use sender algorithms where the structure is a graph (fan-out, error routing, retries) or where you cannot afford the frame allocation.
+
+### The NVIDIA angle: the same pipeline on a GPU
+
+`nvexec` (in the same repository) supplies `nvexec::stream_scheduler` and `multi_gpu_stream_scheduler`, backed by CUDA streams and built with `nvc++ -stdpar=gpu`. Because "where it runs" is just the scheduler you pass, the pipeline body does not change:
+
+```cpp
+nvexec::stream_context stream;
+auto gpu = stream.get_scheduler();
+
+auto work = ex::just(std::move(data))
+          | ex::continues_on(gpu)                         // hop to the device
+          | ex::bulk(n, [](std::size_t i, auto&& v) { v[i] = f(v[i]); })  // → CUDA kernel
+          | ex::continues_on(cpu)                         // hop back
+          | ex::then([](auto&& v) { return reduce(v); });
+```
+
+`bulk` on a stream scheduler becomes a kernel launch; the sender chain becomes work enqueued on the stream, and the stop token becomes stream cancellation. This is the reason NVIDIA drove the proposal: one composition model spanning a thread pool, an `io_uring` context and a GPU, instead of CUDA-specific plumbing glued to whatever the host code happened to use.
+
+### Customisation, and what changed along the way
+
+Early revisions customised algorithms with `tag_invoke` (P1895) — free functions found by ADL on a tag type. That was replaced by **member-function customisation points** (P2855) after complaints about compile-time scalability, and algorithm customisation now goes through *domains* attached to a sender's environment rather than by overloading globally.
+
+A standard library that ships `std::execution` but no way to run anything in parallel would be useless, so **P2079** adds a shared `parallel_scheduler` (`get_parallel_scheduler()`, formerly `system_scheduler`/`system_context`) — a standard parallel execution context so you don't have to bring a thread pool just to say hello.
+
+### Caveats
+
+- **Complexity.** The model is deep template metaprogramming; error messages and compile times are the standing criticism, and the proposal's size and process drew public pushback during standardisation.
+- **Availability.** Use `NVIDIA/stdexec` today (GCC 12+, Clang 16+, MSVC 14.43+, `nvc++` 25.9+ for GPU). Vendor standard-library implementations of `<execution>` lag the paper.
+- **Naming churn.** `transfer` → `continues_on`, `system_scheduler` → `parallel_scheduler`, `tag_invoke` gone. Older blog posts and talks will not compile.
+- **It is a model, not a runtime.** P2300 does not give you an HTTP client, a socket, or a timer wheel. It gives you the contract those things should expose.
 
 ---
 
@@ -454,6 +610,9 @@ Throughput for a trivial HTTP echo server usually orders as: Rust ≈ C++ > Go >
 - `async fn` in traits: stabilised for static dispatch in Rust 1.75; `dyn` still needs `async-trait`.
 
 **C++**
+- Building a sender pipeline and never `connect`ing/starting it — the code compiles and does nothing, exactly like a forgotten `.await` in Rust.
+- Letting an operation state be destroyed while the operation is in flight, or letting a sender outlive what it borrows.
+- `sync_wait` called from a thread of the same pool the pipeline runs on — the thread blocks waiting on work it was supposed to execute.
 - A coroutine's frame is heap-allocated and lives until it completes or is destroyed. Capturing a reference to a local in the *caller* is a dangling-reference bug — coroutine parameters are copied into the frame, but lambda captures are not.
 - `co_await`ing a temporary whose lifetime ends at the end of the full expression.
 - Mixing two coroutine libraries in one program.
@@ -470,6 +629,7 @@ Throughput for a trivial HTTP echo server usually orders as: Rust ≈ C++ > Go >
 | Existing Python/ML stack | Python + `asyncio` (+ uvloop) |
 | Browser or shared JS/TS codebase | JavaScript |
 | Embedding into an existing C++ codebase | C++20 coroutines + Asio |
+| Async C++ that must also target GPUs/accelerators | `std::execution` (P2300) + `stdexec`/`nvexec` |
 | CPU-bound work | Any language with real threads — or a process pool in Python/Node |
 
 ---
@@ -493,6 +653,12 @@ A future is cancel-safe if dropping it mid-poll loses no data. It matters inside
 
 **Go: how do you stop a goroutine?**
 You don't — you ask it to stop. Pass a `context.Context` and check `ctx.Done()`, or close a quit channel. There is no `kill`.
+
+**What problem does P2300 solve that C++20 coroutines don't?**
+Coroutines gave C++ the *syntax* for suspension but no vocabulary types, no algorithms and no scheduler concept, so every library invented its own and none composed. P2300 specifies the model — scheduler/sender/receiver/operation_state, three completion channels, and a set of composable algorithms — so a pipeline can move between a thread pool, an `io_uring` context and a GPU by swapping the scheduler.
+
+**Why does a sender complete on three channels instead of two?**
+`set_value`, `set_error` and `set_stopped` separate "cancelled" from "failed". Go models cancellation as an error value, Rust as the absence of a future, JS as a rejection; making it a channel lets every algorithm forward and handle it uniformly.
 
 **Why does Node have both a microtask and a macrotask queue?**
 So that promise continuations run before the loop moves to the next I/O phase, giving promises "run as soon as possible" semantics. The cost is that an unbounded microtask chain starves I/O.
