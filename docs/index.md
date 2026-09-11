@@ -12,6 +12,7 @@ Structure: short answer (for quick recall) → detailed explanation.
 - [OOP](oop.md)
 - [Concurrency and Async](concurrency.md)
 - [Threading vs asyncio vs Multiprocessing](threading.md)
+- [Async Across Languages: JavaScript, Rust, Go, C++](async-languages.md)
 - [Databases](databases.md)
 - [Web and API](web-api.md)
 - [Caching](caching.md)
