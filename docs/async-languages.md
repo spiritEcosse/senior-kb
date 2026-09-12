@@ -12,12 +12,15 @@ The solutions differ in *who* does the scheduling and *what* the unit of suspens
 | JavaScript | Promise / async fn | runtime event loop (libuv / browser) | stackless | No (single thread + workers) |
 | Go | goroutine | runtime M:N scheduler, work-stealing | growable stack (starts 2–8 KB) | Yes |
 | Rust | `Future` | user-chosen executor (tokio, async-std) | stackless state machine | Yes (multi-thread runtime) |
-| C++ | coroutine (C++20) | none built-in — you write it | stackless (heap frame) | Depends on your executor |
+| C++ | sender (`std::execution`, P2300) | any `scheduler` you connect to — thread pool, `io_uring`, GPU | stackless `operation_state`, no heap allocation required | Yes (whatever the scheduler does) |
 
 Two axes explain almost every difference:
 
-1. **Stackful vs stackless.** Go gives each goroutine a real (growable) stack, so any function can block anywhere. Everyone else compiles `async` functions into state machines with no stack, so only explicitly marked functions can suspend.
-2. **Batteries included vs bring-your-own.** Go and JS ship a runtime you cannot replace. Python ships one you *can* replace (uvloop). Rust ships a `Future` trait and no executor. C++ ships a coroutine *language feature* and essentially nothing else.
+1. **Stackful vs stackless.** Go gives each goroutine a real (growable) stack, so any function can block anywhere. Everyone else compiles `async` functions into state machines with no stack, so only explicitly marked functions can suspend. C++ pushes this furthest: `connect()`ing a sender to a receiver builds the entire chain as **one nested object** that can live on the stack.
+2. **Batteries included vs bring-your-own.** Go and JS ship a runtime you cannot replace. Python ships one you *can* replace (uvloop). Rust ships a `Future` trait and no executor. C++26 ships a *model* — `std::execution` (P2300) — plus one standard `parallel_scheduler`, and leaves sockets, timers and accelerators to libraries that implement the same concepts.
+
+!!! note "Which C++ this page means"
+    Every C++ entry below is the **P2300 `std::execution`** model — senders, receivers and schedulers, adopted into the C++26 working draft, reference implementation [NVIDIA/stdexec](https://github.com/NVIDIA/stdexec). It is explained in full [further down](#c-the-p2300-proposal-stdexecution). Before it, "async C++" meant picking one of Asio, cppcoro, libunifex or folly::coro, each with its own incompatible task type and none of them composable with the others; that era is history and is not used for comparison here. C++20 coroutines still appear where P2300 uses them — as one way to *write* a sender (`exec::task<T>`).
 
 ---
 
@@ -59,7 +62,20 @@ func handler() {
 
 Go is the outlier: because goroutines are stackful, blocking is a *runtime* concern, not a *type* concern. The cost is that you cannot tell from a signature whether a function blocks, and you lose `await` as an explicit yield point.
 
-C++20 is coloured in a stricter way: a function is a coroutine if its body contains `co_await`/`co_yield`/`co_return`, which is a *body* property, not a signature property — the caller only sees the return type (`task<T>`).
+C++ is the only one here with **both** answers, depending on which half of the model you write:
+
+```cpp
+// Sender algorithms are NOT coloured: ordinary callables compose into async work
+int parse(std::string body);                         // plain function, no annotation
+ex::sender auto work = fetch(sch, url) | ex::then(parse);
+
+// The coroutine form IS coloured — and at the body, not the signature
+exec::task<int> handler(ex::scheduler auto sch) {
+    co_return parse(co_await fetch(sch, url));       // any co_await makes this a coroutine
+}
+```
+
+`then(parse)` lifts a synchronous function into an async pipeline with no rewrite — the closest anyone here gets to *no* colouring without paying for stacks. Reach for the coroutine form when straight-line sequencing reads better, and colouring comes back; but it stays a *body* property, so the caller only ever sees a sender.
 
 ---
 
@@ -73,7 +89,7 @@ This is the single most common source of cross-language bugs.
 | Python | **Lazy-ish** — nothing runs until awaited or wrapped in `create_task` |
 | Rust | **Lazy** — nothing runs until polled (`.await` or `spawn`) |
 | Go | **Eager** — `go f()` schedules immediately |
-| C++20 | Depends on the `promise_type` (`initial_suspend` returns `suspend_always` → lazy, `suspend_never` → eager) |
+| C++ | **Lazy, always** — a sender is a *description*; nothing runs until `connect()` + `start()`, usually via `sync_wait` / `start_detached` |
 
 ```javascript
 // JS: both requests are already in flight before the first await
@@ -97,8 +113,16 @@ let (u, o) = tokio::join!(fetch_user(), fetch_orders());   // concurrent, same t
 let h = tokio::spawn(fetch_user());                        // concurrent, may be another thread
 ```
 
-!!! warning "The Rust trap"
-    `let fut = fetch();` followed later by `fut.await` looks like it "started early" — it did not. A Rust `Future` makes no progress unless something polls it. Forgetting `.await` is a warning, not an error, and the work silently never happens.
+```cpp
+// C++: a sender is inert too — building one and dropping it does nothing at all
+ex::sender auto u = fetch_user(sch);                       // not started
+ex::sender auto o = fetch_orders(sch);                     // not started
+auto [user, orders] =
+    ex::sync_wait(ex::when_all(std::move(u), std::move(o))).value();   // connect + start
+```
+
+!!! warning "The lazy trap — Rust and C++"
+    `let fut = fetch();` followed later by `fut.await` looks like it "started early". It did not: a Rust `Future` makes no progress unless something polls it, and forgetting `.await` is a warning, not an error. A C++ sender is the same contract one step stricter — it is not even a running object, just a value describing work, and a pipeline you never `sync_wait`/`start_detached`/`connect` compiles cleanly and does nothing. In both languages the failure is silent: no task, no log line, no error.
 
 ---
 
@@ -130,12 +154,13 @@ const first   = await Promise.race(urls.map(u => fetch(u)));       // first sett
 const firstOk = await Promise.any(urls.map(u => fetch(u)));        // first fulfilled
 ```
 
-| Combinator | Python | JavaScript | Rust (tokio) | Go |
-|---|---|---|---|---|
-| All, fail fast | `gather()` / `TaskGroup` | `Promise.all` | `try_join!` | `errgroup.Group` |
-| All, collect errors | `gather(return_exceptions=True)` | `Promise.allSettled` | `join_all` | `sync.WaitGroup` |
-| First to finish | `wait(FIRST_COMPLETED)` | `Promise.race` | `select!` | `select` on channels |
-| First success | — | `Promise.any` | manual | manual |
+| Combinator | Python | JavaScript | Rust (tokio) | Go | C++ (`std::execution`) |
+|---|---|---|---|---|---|
+| All, fail fast | `gather()` / `TaskGroup` | `Promise.all` | `try_join!` | `errgroup.Group` | `when_all` — a child's error requests stop on its siblings |
+| All, collect errors | `gather(return_exceptions=True)` | `Promise.allSettled` | `join_all` | `sync.WaitGroup` | `when_all` over children each ending in `upon_error` / `into_variant` |
+| First to finish | `wait(FIRST_COMPLETED)` | `Promise.race` | `select!` | `select` on channels | `exec::when_any` (stdexec; not in P2300 itself) |
+| First success | — | `Promise.any` | manual | manual | `exec::when_any` + `let_error` |
+| Data-parallel over N | `gather` over a range | — | `spawn` per chunk | goroutine per chunk | `bulk(n, f)` — one algorithm, GPU-mappable |
 
 **Go**
 
@@ -184,22 +209,40 @@ for h in handles {
 }
 ```
 
-**C++20 (with a library — here `cppcoro`-style)**
+**C++ (`std::execution`)**
 
 ```cpp
-#include <cppcoro/task.hpp>
-#include <cppcoro/when_all.hpp>
+#include <stdexec/execution.hpp>
+#include <exec/static_thread_pool.hpp>
+namespace ex = stdexec;
 
-cppcoro::task<int> fetch(std::string url);
+exec::static_thread_pool pool{8};
+ex::scheduler auto sch = pool.get_scheduler();
 
-cppcoro::task<std::vector<int>> fetch_all(std::vector<std::string> urls) {
-    std::vector<cppcoro::task<int>> tasks;
-    for (auto& u : urls) tasks.push_back(fetch(u));       // lazy: not started yet
-    co_return co_await cppcoro::when_all(std::move(tasks));
+// Heterogeneous fan-out: when_all takes senders and completes when all of them do.
+// The result type is the concatenation of the children's value types, known at compile time.
+auto [user, orders] =
+    ex::sync_wait(ex::when_all(fetch_user(sch), fetch_orders(sch))).value();
+
+// Homogeneous fan-out over N indices: bulk is the one algorithm for "do this n times".
+std::vector<int> codes(urls.size());
+ex::sender auto all =
+      ex::schedule(sch)
+    | ex::bulk(urls.size(), [&](std::size_t i) { codes[i] = fetch_status(urls[i]); })
+    | ex::then([&] { return std::move(codes); });
+
+auto [result] = ex::sync_wait(std::move(all)).value();
+```
+
+The coroutine spelling of the same fan-out, when the sequencing reads better straight-line:
+
+```cpp
+exec::task<std::pair<User, Orders>> load(ex::scheduler auto sch) {
+    co_return co_await ex::when_all(fetch_user(sch), fetch_orders(sch));
 }
 ```
 
-The **P2300** proposal (`std::execution`, senders/receivers) finally gives the standard library a composition model — see [the section below](#c-the-p2300-proposal-stdexecution). Until implementations catch up, "async C++" means picking one of Asio, libunifex, cppcoro, folly::coro or stdexec — they do not interoperate.
+Two things fall out of the model rather than being features of a library: `when_all` is **fail-fast and structured** — if one child completes with an error, the stop token propagates to the siblings and the whole node completes once — and `bulk` is the same call whether the scheduler is a thread pool, an `io_uring` context or a GPU stream.
 
 ---
 
@@ -213,7 +256,7 @@ The deepest divergence between these languages.
 | JavaScript | `AbortController` / `AbortSignal`, cooperative by convention | Advisory — a Promise cannot be cancelled |
 | Rust | Drop the future | Pre-emptive: the state machine stops being polled |
 | Go | `context.Context` + `ctx.Done()` channel | Cooperative — the callee must check |
-| C++ | `std::stop_token` (C++20) | Cooperative |
+| C++ | stop token read from `get_env(receiver)`; algorithms forward it and completion arrives on `set_stopped` | Cooperative, but structural — and a channel of its own, not an error |
 
 ```python
 task = asyncio.create_task(long_job())
@@ -260,8 +303,24 @@ tokio::select! {
 }
 ```
 
+```cpp
+// C++: inject a stop token into the pipeline's environment; every algorithm forwards it.
+std::stop_source src;
+
+ex::sender auto work =
+      ex::write_env(long_job(sch), ex::prop{ex::get_stop_token, src.get_token()})
+    | ex::upon_stopped([] { return Summary::partial(); });   // stopped is not an error
+
+std::jthread timer{[&] { std::this_thread::sleep_for(5s); src.request_stop(); }};
+
+auto maybe = ex::sync_wait(std::move(work));   // nullopt if nothing handled set_stopped
+```
+
 !!! danger "Rust: cancellation safety"
     `tokio::select!` drops the futures of the branches that lose the race. If a future had already consumed bytes from a socket into a local buffer, those bytes are gone. A future is *cancel-safe* only if dropping it mid-poll loses no state — `AsyncReadExt::read` is, `AsyncBufReadExt::read_line` is not. Inside `select!`, prefer holding state outside the future or using `tokio::pin!` on a future you keep across iterations.
+
+!!! danger "C++: the operation state must outlive the operation"
+    `connect()` returns an `operation_state` **by value**, and `start()` is a promise that the object stays alive and un-moved until a completion arrives. Destroying it early — returning it, putting it in a `vector` that reallocates, letting a scope close while an I/O completion is still in flight — is a use-after-free, not an exception. This is the price of the allocation-free design: the compiler will not save you, only structure will. `start_detached` deliberately breaks that structure, which is exactly why `exec::async_scope` exists to give detached work an owner you can wait on.
 
 !!! danger "Go: goroutine leaks"
     Go cannot kill a goroutine from the outside. `go worker()` with no `ctx` and no exit condition is a permanent leak; a send on an unbuffered channel with no receiver parks that goroutine forever. Every goroutine needs an owner and a termination path. Detect with `goleak` in tests, `runtime.NumGoroutine()` and `/debug/pprof/goroutine` in production.
@@ -290,15 +349,22 @@ Microtasks (promises) drain **completely** before the next macrotask (timers, I/
 
 **Rust** — you choose. `#[tokio::main]` gives a multi-thread work-stealing runtime; `#[tokio::main(flavor = "current_thread")]` gives a single-threaded one. Tasks are **not** pre-empted: a task that computes without awaiting blocks its worker thread. Use `tokio::task::spawn_blocking` for blocking/CPU work (separate, larger pool up to 512 threads by default) and `tokio::task::yield_now()` in long compute loops. `spawn` requires `Send + 'static`; `spawn_local` (with a `LocalSet`) does not.
 
-**C++** — there is no scheduler unless you supply one (P2300 standardises the *concept* of one, and P2079 adds a shared `parallel_scheduler`). `co_await` transfers control to whatever the awaiter's `await_suspend` decides; with Asio that's `io_context::run()` on however many threads you started.
+**C++** — the scheduler is a *parameter*, never a global. `std::execution` standardises what a scheduler is; where work actually runs is whichever one you `schedule()` on or `continues_on()` to, and the pipeline body does not change when you swap it. C++26 ships one (`get_parallel_scheduler()`, P2079) so "hello, parallelism" needs no third-party pool; `stdexec` adds `static_thread_pool`, `run_loop` (single-threaded, the `current_thread` flavour), an `io_uring` context on Linux and `nvexec::stream_scheduler` for CUDA. Like Rust tasks and unlike goroutines, **nothing is pre-empted**: a `then()` that computes for a second owns its worker thread for a second.
 
 ```cpp
-// Asio: a thread pool draining one io_context
-asio::io_context io;
-std::vector<std::thread> pool;
-for (int i = 0; i < 4; ++i) pool.emplace_back([&]{ io.run(); });
+exec::static_thread_pool pool{4};                   // 4 worker threads
+ex::run_loop loop;                                  // single-threaded context
+std::jthread loop_thread{[&] { loop.run(); }};      // somebody must drain it
 
-asio::co_spawn(io, handle_connection(std::move(sock)), asio::detached);
+ex::sender auto work =
+      ex::schedule(pool.get_scheduler())            // start on the pool
+    | ex::then([&] { return handle(std::move(sock)); })
+    | ex::continues_on(loop.get_scheduler());       // finish on the loop thread
+
+exec::async_scope scope;
+scope.spawn(std::move(work));                       // detached work, but with an owner
+ex::sync_wait(scope.on_empty());                    // structured shutdown: wait for all of it
+loop.finish();                                      // lets loop.run() return
 ```
 
 ---
@@ -409,7 +475,7 @@ Algorithms forward the token down the chain automatically, so `when_all` cancell
 | Rust | drop the future | No signal at all |
 | Python | `CancelledError` raised at an await point | Yes (`BaseException`) |
 | JS | `AbortSignal` → `AbortError` rejection | No |
-| P2300 | stop token in, `set_stopped` out | **Yes, a separate channel** |
+| C++ (P2300) | stop token in, `set_stopped` out | **Yes, a separate channel** |
 
 ### Coroutine interop
 
@@ -461,13 +527,13 @@ A standard library that ships `std::execution` but no way to run anything in par
 
 ## Synchronisation primitives
 
-| Need | Python | JavaScript | Go | Rust (tokio) |
-|---|---|---|---|---|
-| Mutual exclusion | `asyncio.Lock` | — (single thread) | `sync.Mutex` | `tokio::sync::Mutex` |
-| Limit concurrency | `asyncio.Semaphore` | `p-limit` | buffered channel | `tokio::sync::Semaphore` |
-| Message passing | `asyncio.Queue` | `EventEmitter` / streams | channels (idiomatic) | `mpsc` / `broadcast` / `watch` |
-| Wait for N | `gather` / `TaskGroup` | `Promise.all` | `sync.WaitGroup` | `JoinSet` |
-| One-shot signal | `asyncio.Event` | Promise | `close(ch)` | `oneshot` |
+| Need | Python | JavaScript | Go | Rust (tokio) | C++ (`std::execution`) |
+|---|---|---|---|---|---|
+| Mutual exclusion | `asyncio.Lock` | — (single thread) | `sync.Mutex` | `tokio::sync::Mutex` | none standard — state in the operation state has one reader; `std::mutex` for a non-suspending section |
+| Limit concurrency | `asyncio.Semaphore` | `p-limit` | buffered channel | `tokio::sync::Semaphore` | width of the scheduler, or `bulk` over chunks |
+| Message passing | `asyncio.Queue` | `EventEmitter` / streams | channels (idiomatic) | `mpsc` / `broadcast` / `watch` | none standard — `let_value` passes ownership downstream instead |
+| Wait for N | `gather` / `TaskGroup` | `Promise.all` | `sync.WaitGroup` | `JoinSet` | `when_all`; `exec::async_scope::on_empty()` for spawned work |
+| One-shot signal | `asyncio.Event` | Promise | `close(ch)` | `oneshot` | `std::stop_source` + `upon_stopped`; `split` for a value many awaiters share |
 
 ```python
 sem = asyncio.Semaphore(10)
@@ -487,6 +553,9 @@ defer func() { <-sem }()   // release
 let sem = Arc::new(Semaphore::new(10));
 let permit = sem.clone().acquire_owned().await?;   // dropped = released
 ```
+
+!!! note "C++: structure instead of primitives"
+    The gaps in that column are mostly deliberate. P2300 standardises *composition*, not a runtime: there is no standard async queue, timer or lock, and `stdexec` supplies the contexts (`io_uring`, timers, `async_scope`) that the paper leaves out. What replaces the primitives is the shape of the pipeline — a value lives in the operation state and is reached by exactly one continuation at a time, so `when_all` joins with no `WaitGroup` and `let_value` hands ownership on with no channel. The primitive you will genuinely miss is a sender-aware queue for producer/consumer work; that is still library territory.
 
 !!! note "Rust: `std::sync::Mutex` vs `tokio::sync::Mutex`"
     Use `std::sync::Mutex` for short critical sections with no `.await` inside — it's faster and its guard is not `Send` across awaits (the compiler enforces this). Use `tokio::sync::Mutex` only when you must hold the lock *across* an `.await`. Holding any lock across an await is a deadlock risk and serialises your tasks; restructuring to avoid it is usually the right fix.
@@ -536,6 +605,19 @@ match handle.await {
 }
 ```
 
+```cpp
+// Three channels, routed by three families of algorithm — and the set of possible
+// errors is part of the sender's type (completion_signatures), checked at compile time.
+ex::sender auto work =
+      fetch(sch, url)
+    | ex::then(parse)                                            // value channel
+    | ex::let_error([](std::exception_ptr) { return ex::just(Row::empty()); })
+    | ex::upon_stopped([] { return Row::empty(); });              // cancelled ≠ failed
+
+// sync_wait: value -> optional<tuple>, error -> rethrown here, stopped -> nullopt
+auto maybe = ex::sync_wait(std::move(work));
+```
+
 | | Failure of one task kills siblings? |
 |---|---|
 | Python `gather()` | No (siblings keep running; first exception propagates) |
@@ -544,6 +626,8 @@ match handle.await {
 | Go `errgroup.WithContext` | Yes, cooperatively (ctx cancelled) |
 | Rust `try_join!` | Yes — losing futures are dropped |
 | Rust `JoinSet` | No, until you `abort_all()` |
+| C++ `when_all` | Yes — the first error requests stop on the siblings |
+| C++ `exec::async_scope` | No — spawned work is independent until you request stop on the scope |
 
 ---
 
@@ -561,7 +645,7 @@ All of these end at the same OS primitives:
 - **Node**: libuv → `epoll`/`kqueue`/IOCP, plus a 4-thread pool (`UV_THREADPOOL_SIZE`) for file I/O and DNS, which *are not* natively async on Linux.
 - **Go**: `netpoller` (`epoll`/`kqueue`) integrated into the scheduler — blocking-looking calls park the goroutine.
 - **Rust**: mio → `epoll`/`kqueue`/IOCP; `tokio-uring` / `glommio` for `io_uring`.
-- **C++**: Asio wraps the same, and can use `io_uring` on recent Linux.
+- **C++**: no I/O context is standard yet — `stdexec`'s `exec::io_uring_context` on Linux, and vendor or embedded contexts elsewhere, expose the same `scheduler` concept, so the pipeline above them is unchanged when you swap one for another.
 
 Readiness ("the socket is now readable, go read it") vs completion ("your read finished, here's the buffer") is why Windows and `io_uring` sometimes need a different buffer ownership model — `io_uring` wants the buffer to stay alive for the whole operation, which conflicts with Rust's "cancel = drop" model and is why `tokio-uring` uses owned buffers.
 
@@ -578,8 +662,10 @@ Order-of-magnitude figures; measure your own workload.
 | Rust task (tokio) | ~0.1–1 µs | ~64–300 B + future size | millions |
 | Python coroutine | ~1 µs | ~0.5–1 KB | ~100k |
 | JS promise | ~0.1 µs | ~100 B | millions |
+| C++ sender chain (P2300) | none — `connect` is a constructor, `start` a call | the nested `operation_state`, stack-allocatable, no allocation | bounded by memory, not by a runtime |
+| C++ `exec::task` coroutine | ~0.05–0.5 µs | one heap frame, ~100 B + locals | millions |
 
-Throughput for a trivial HTTP echo server usually orders as: Rust ≈ C++ > Go > Node > Python (CPython+uvloop), with Rust/C++ typically 3–10× CPython. But at this level the bottleneck is almost always the database, the serialiser, or the network — not the runtime.
+Throughput for a trivial HTTP echo server usually orders as: Rust ≈ C++ > Go > Node > Python (CPython+uvloop), with Rust/C++ typically 3–10× CPython. C++ is the only row with a *zero* in the spawn column, because a sender chain is not a spawned object at all — but that only pays off where allocation actually dominates (fine-grained pipelines, embedded, GPU launch paths). At web-service scale the bottleneck is almost always the database, the serialiser, or the network — not the runtime.
 
 ---
 
@@ -609,13 +695,14 @@ Throughput for a trivial HTTP echo server usually orders as: Rust ≈ C++ > Go >
 - Cancellation-safety bugs in `select!`.
 - `async fn` in traits: stabilised for static dispatch in Rust 1.75; `dyn` still needs `async-trait`.
 
-**C++**
-- Building a sender pipeline and never `connect`ing/starting it — the code compiles and does nothing, exactly like a forgotten `.await` in Rust.
-- Letting an operation state be destroyed while the operation is in flight, or letting a sender outlive what it borrows.
-- `sync_wait` called from a thread of the same pool the pipeline runs on — the thread blocks waiting on work it was supposed to execute.
-- A coroutine's frame is heap-allocated and lives until it completes or is destroyed. Capturing a reference to a local in the *caller* is a dangling-reference bug — coroutine parameters are copied into the frame, but lambda captures are not.
-- `co_await`ing a temporary whose lifetime ends at the end of the full expression.
-- Mixing two coroutine libraries in one program.
+**C++ (`std::execution`)**
+- Building a pipeline and never `connect`ing/starting it — the code compiles and does nothing, exactly like a forgotten `.await` in Rust.
+- Letting an operation state be destroyed or moved while the operation is in flight, or letting a sender outlive what it borrows. Nothing diagnoses this.
+- `sync_wait` called from a thread of the pool the pipeline runs on — the thread blocks waiting on work it was supposed to execute. `sync_wait` belongs at the edge of the program, not inside it.
+- Blocking or computing at length inside `then()`: the callable runs on the scheduler's thread and nothing pre-empts it, the same trap as Rust. Move that work to a context meant for it with `continues_on`.
+- `start_detached` with no owner — the fire-and-forget hole in an otherwise structured model. Use `exec::async_scope` and wait on `on_empty()` at shutdown.
+- In the coroutine form: the frame is heap-allocated and lives until completion, parameters are copied into it but **lambda captures are not**, so capturing a reference to a caller's local dangles; and `co_await`ing a temporary whose lifetime ends with the full expression is a use-after-free.
+- Reading talks or blog posts from an older revision — `transfer`, `tag_invoke` and `system_scheduler` no longer compile (see [naming churn](#caveats)).
 
 ---
 
@@ -625,10 +712,11 @@ Throughput for a trivial HTTP echo server usually orders as: Rust ≈ C++ > Go >
 |---|---|
 | 10k+ idle connections, mostly I/O | Go, Rust, Node |
 | Predictable tail latency, no GC pauses | Rust, C++ |
+| Async with no heap allocation at all (embedded, hard real-time) | C++ (`std::execution`) |
 | Team velocity on a network service | Go |
 | Existing Python/ML stack | Python + `asyncio` (+ uvloop) |
 | Browser or shared JS/TS codebase | JavaScript |
-| Embedding into an existing C++ codebase | C++20 coroutines + Asio |
+| Embedding into an existing C++ codebase | `std::execution` via `stdexec` — sender algorithms for the graph, `exec::task` where straight-line reads better |
 | Async C++ that must also target GPUs/accelerators | `std::execution` (P2300) + `stdexec`/`nvexec` |
 | CPU-bound work | Any language with real threads — or a process pool in Python/Node |
 
@@ -640,7 +728,10 @@ Throughput for a trivial HTTP echo server usually orders as: Rust ≈ C++ > Go >
 Goroutines are multiplexed onto a small number of OS threads (M:N) by the runtime, start with ~2 KB of growable stack instead of a fixed MB-sized one, and switch in user space (~100 ns) without a kernel trap.
 
 **What does `async` actually compile to in Rust/C++?**
-A state machine: the compiler splits the function at each suspension point into states, and the locals that live across a suspension become fields of a generated struct. Rust's is `!Unpin` and must be pinned before polling; C++'s frame is heap-allocated (the allocation may be elided).
+A state machine: the compiler splits the function at each suspension point into states, and the locals that live across a suspension become fields of a generated struct. Rust's is `!Unpin` and must be pinned before polling. In C++ it depends which form you wrote: a coroutine gets a heap-allocated frame (elidable in principle, rarely across a library boundary), while a sender pipeline has no frame at all — `connect()` composes the whole chain into one nested `operation_state` the caller owns, which is why the model can be allocation-free.
+
+**Where does C++ put the thing Rust calls a task and Go calls a goroutine?**
+Nowhere — that is the point. There is no runtime-side task object to allocate and track: `connect(sender, receiver)` returns an `operation_state` **by value**, the caller decides where it lives (usually inside its parent's operation state, all the way up to one object on the stack), and `start()` runs it. The trade is that lifetime becomes your problem: the state must outlive the operation, so `exec::async_scope` exists to own work you deliberately detach.
 
 **Why does Python's `asyncio` not give parallelism?**
 One event loop runs on one thread, and the GIL allows only one thread to execute bytecode. Concurrency comes from overlapping *waits*, not from overlapping computation.
