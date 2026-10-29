@@ -17,12 +17,43 @@ A thread holds the GIL and executes bytecode. After the interval (`sys.getswitch
 3. GIL workarounds:
 - `multiprocessing` — separate interpreter per process
 - C extensions (NumPy, Pillow) — explicitly release the GIL during heavy computation
-- Free-threaded CPython (Python 3.13+, PEP 703, experimental)
+- Free-threaded CPython (`python3.14t` / `3.15t`, PEP 703) — officially supported since 3.14 (PEP 779), still opt-in; see the next section
 
 !!! warning
     `asyncio` does NOT bypass the GIL — it is single-threaded and doesn't need parallel threads.
 
 🔗 [https://www.youtube.com/watch?v=AWX4JnAnjBE](https://www.youtube.com/watch?v=AWX4JnAnjBE)
+
+---
+
+### Free-threaded Python (no GIL)
+
+**Short answer:**
+Yes — 3.14 and 3.15 can run without the GIL, but only with the separate **free-threaded build** (`python3.15t`, or `./configure --disable-gil`). The standard build still has the GIL. Check with `sys._is_gil_enabled()` (`False` = no GIL).
+
+**Status:**
+- 3.13 — experimental (PEP 703).
+- 3.14 — officially supported, no longer experimental (PEP 779). Not the default build.
+- 3.15 — adds the `abi3t` stable ABI (PEP 803): one extension wheel can target both GIL and free-threaded builds.
+- Making free-threaded the default is a separate future decision.
+
+**How the GIL's jobs are replaced:**
+
+| Problem the GIL solved | Free-threaded replacement |
+|---|---|
+| Refcount races | Biased refcounting (owner thread: non-atomic; other threads: atomic), immortal objects (`None`, small ints, interned strings), deferred refcounting (functions, modules, code objects) |
+| `list` / `dict` / `set` corruption | Per-object locks; lock-free optimistic reads; QSBR for safe memory reclamation |
+| Deadlocks between object locks | Critical sections: the lock is released automatically if the thread blocks |
+| Allocator thread safety | `mimalloc` with per-thread heaps |
+| GC consistency | Stop-the-world, non-generational GC |
+| Interpreter speed | Thread-safe specializing adaptive interpreter (3.14); single-thread overhead ~5–10% |
+| C-extension safety | Extensions must declare `Py_mod_gil`; otherwise the GIL is re-enabled on import |
+
+!!! warning
+    The interpreter is memory-safe without the GIL, but **your code is not magically thread-safe**. `x += 1`, `if k not in d: d[k] = ...` and other compound operations were never atomic, even with the GIL — they still need `threading.Lock`. Mutating a container while iterating it will not crash, but may give inconsistent results.
+
+!!! warning
+    One C extension without free-threading support silently turns the GIL back on for the whole process (with a warning). Check your dependencies.
 
 ---
 
