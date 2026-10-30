@@ -45,7 +45,7 @@ async with asyncio.Semaphore(10):   # max 10 concurrent
 | | `gather` | `wait` |
 |---|---|---|
 | Input | coroutines | Task objects |
-| Cancels on error | yes (default) | no |
+| On error | first exception propagates; other tasks keep running (not cancelled) unless `gather` itself is cancelled | no cancellation; inspect `done` / `pending` |
 | Use when | simple fan-out | fine-grained control |
 
 ### asyncio.gather vs asyncio.create_task
